@@ -21,7 +21,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --bg: #15161a;
     --panel: #1d1f24;
     --panel-2: #23262c;
@@ -39,6 +39,25 @@
     --stage: #121317;
     color-scheme: dark;
   }
+}
+
+:root[data-theme='dark'] {
+  --bg: #15161a;
+  --panel: #1d1f24;
+  --panel-2: #23262c;
+  --line: #2f333b;
+  --text: #ece9e4;
+  --muted: #9a958d;
+  --frame: #6ea2ff;
+  --art: #f1ede6;
+  --bridge: #4ade80;
+  --thin: #fbbf24;
+  --removed: #f87171;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --stage: #121317;
+  color-scheme: dark;
 }
 
 * {
@@ -493,8 +512,8 @@ details.section:not([open]) summary::after {
 
 .busy {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  right: calc(16px + env(safe-area-inset-right, 0px));
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   background: var(--text);
   color: var(--bg);
   padding: 6px 12px;
@@ -535,4 +554,25 @@ details.section:not([open]) summary::after {
   .stage {
     min-height: 300px;
   }
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  max-width: calc(100% - 32px);
+}
+.toast.ok {
+  color: var(--ok);
+}
+.toast.bad {
+  color: var(--bad);
 }

@@ -6,6 +6,7 @@ import { Preview3D } from './ui/preview3d.js';
 import { DEFAULTS, build2D, build3D } from './core/pipeline.js';
 import { computeLayout } from './core/compose.js';
 import { toBinarySTL, toSVG } from './core/mesh.js';
+import { makeZip } from './core/zip.js';
 import {
   SAMPLES,
   autoThreshold,
@@ -201,7 +202,12 @@ async function run() {
 let wasmPromise = null;
 function getWasm() {
   if (!wasmPromise) {
-    wasmPromise = Module({ locateFile: () => wasmUrl }).then((w) => {
+    // A single-file build inlines the wasm as a data: URL; hand the bytes
+    // over directly so no network fetch is needed.
+    const opts = wasmUrl.startsWith('data:')
+      ? { wasmBinary: Uint8Array.from(atob(wasmUrl.slice(wasmUrl.indexOf(',') + 1)), (c) => c.charCodeAt(0)) }
+      : { locateFile: () => wasmUrl };
+    wasmPromise = Module(opts).then((w) => {
       w.setup();
       state.wasm = w;
       return w;
@@ -521,33 +527,73 @@ const preview3d = new Preview3D($('stage3d'));
 $('v-color').addEventListener('input', (e) => preview3d.setColor(e.target.value));
 $('fit3d').addEventListener('click', () => preview3d.fit());
 
-function download(data, name, type) {
-  const blob = new Blob([data], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+// Inside a claude.ai artifact, files go through the platform's downloads
+// capability (which does not accept .stl, so STL files are zipped there).
+let hostDownloads;
+function hostSaver() {
+  if (hostDownloads === undefined) {
+    hostDownloads = window.claude?.use ? window.claude.use('downloads').catch(() => null) : Promise.resolve(null);
+  }
+  return hostDownloads;
+}
+
+function flash(text, cls = '') {
+  const el = $('toast');
+  el.textContent = text;
+  el.className = `toast ${cls}`;
+  el.hidden = false;
+  clearTimeout(flash.t);
+  flash.t = setTimeout(() => (el.hidden = true), 3500);
+}
+
+async function deliver(files) {
+  // files: [{ name, data, type }]
+  const saver = await hostSaver();
+  if (saver) {
+    const direct = files.length === 1 && !/\.stl$/i.test(files[0].name);
+    const name = direct ? files[0].name : `${baseName()}.zip`;
+    const data = direct ? files[0].data : makeZip(files.map((f) => ({ name: f.name, data: f.data })));
+    try {
+      await saver.save({ filename: name, data: new Blob([data]) });
+      flash(`Saved ${name}`, 'ok');
+    } catch (err) {
+      if (err?.code !== 'declined') flash(`Could not save: ${err?.message || err?.code || err}`, 'bad');
+    }
+    return;
+  }
+  for (const f of files) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([f.data], { type: f.type }));
+    a.download = f.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
 }
 
 function baseName() {
   return `${state.sourceName}-${state.s.frameShape}-${Math.round(state.s.width)}mm`;
 }
 
+function stlFiles({ withStand }) {
+  const m = state.result3d;
+  const files = [{ name: `${baseName()}.stl`, data: toBinarySTL(m.exportPiece(), baseName()), type: 'model/stl' }];
+  const stand = withStand && m.exportStand();
+  if (stand) files.push({ name: `${baseName()}-stand.stl`, data: toBinarySTL(stand, 'stand'), type: 'model/stl' });
+  return files;
+}
+
 $('dl-stl').addEventListener('click', () => {
-  if (!state.result3d) return;
-  const mesh = state.result3d.exportPiece();
-  download(toBinarySTL(mesh, baseName()), `${baseName()}.stl`, 'model/stl');
+  if (state.result3d) deliver(stlFiles({ withStand: false }));
 });
 $('dl-stand').addEventListener('click', () => {
-  const mesh = state.result3d?.exportStand();
-  if (mesh) download(toBinarySTL(mesh, 'stand'), `${baseName()}-stand.stl`, 'model/stl');
+  if (!state.result3d?.stand) return;
+  deliver(stlFiles({ withStand: true }).slice(1));
 });
 $('dl-svg').addEventListener('click', () => {
   if (!state.result2d) return;
-  download(toSVG(state.result2d.solidPolys, { title: baseName() }), `${baseName()}.svg`, 'image/svg+xml');
+  deliver([{ name: `${baseName()}.svg`, data: toSVG(state.result2d.solidPolys, { title: baseName() }), type: 'image/svg+xml' }]);
 });
 
 window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', draw2D);

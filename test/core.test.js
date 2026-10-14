@@ -171,3 +171,15 @@ describe('full pipeline', () => {
     m.dispose();
   });
 });
+
+describe('zip', () => {
+  it('writes a valid stored zip', async () => {
+    const { makeZip, crc32 } = await import('../src/core/zip.js');
+    expect(crc32(new TextEncoder().encode('hello'))).toBe(0x3610a686);
+    const z = makeZip([{ name: 'a.txt', data: 'hello' }, { name: 'b.bin', data: new Uint8Array([1, 2, 3]) }]);
+    const dv = new DataView(z.buffer);
+    expect(dv.getUint32(0, true)).toBe(0x04034b50);
+    expect(dv.getUint32(z.length - 22, true)).toBe(0x06054b50);
+    expect(dv.getUint16(z.length - 12, true)).toBe(2);
+  });
+});
