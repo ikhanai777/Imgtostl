@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Imgtostl · Silhouette frames</title>
+    <meta name="description" content="Turn any image into printable 2D silhouette art inside a frame that stands upright — export SVG and watertight STL." />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='14' r='11' fill='none' stroke='%23ff7a45' stroke-width='3'/%3E%3Crect x='8' y='25' width='16' height='5' rx='1' fill='%23ff7a45'/%3E%3Cpath d='M16 7l5 12h-10z' fill='%23ff7a45'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="14" r="11" fill="none" stroke="currentColor" stroke-width="3" /><rect x="8" y="25" width="16" height="5" rx="1" fill="currentColor" /><path d="M16 7l5 12h-10z" fill="currentColor" /></svg>
+        <div>
+          <h1>Imgtostl</h1>
+          <p>Image → SVG → STL silhouette frames</p>
+        </div>
+      </div>
+      <div class="actions">
+        <label class="btn primary" for="file">Open image…</label>
+        <input id="file" type="file" accept="image/*" hidden />
+        <div class="btn-group" id="samples"></div>
+        <span class="sep"></span>
+        <button class="btn" id="dl-svg" disabled>SVG</button>
+        <button class="btn" id="dl-stand" disabled hidden>Stand STL</button>
+        <button class="btn accent" id="dl-stl" disabled>Download STL</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <div class="presets">
+          <span>Presets</span>
+          <div class="chips" id="presets"></div>
+        </div>
+        <form id="controls" autocomplete="off"></form>
+        <button class="btn ghost small" id="reset" type="button">Reset all settings</button>
+      </aside>
+
+      <section class="views">
+        <div class="panel" id="panel2d">
+          <div class="panel-head">
+            <h2>2D silhouette</h2>
+            <div class="toggles">
+              <label><input type="checkbox" id="v-photo" /> Photo</label>
+              <label><input type="checkbox" id="v-outline" checked /> Outline</label>
+              <label><input type="checkbox" id="v-issues" checked /> Issues</label>
+            </div>
+          </div>
+          <div class="stage" id="stage2d">
+            <canvas id="canvas2d"></canvas>
+            <div class="drop-hint" id="drop-hint">
+              <strong>Drop an image here</strong>
+              <span>or paste from the clipboard · PNG, JPG, SVG, WebP</span>
+            </div>
+            <div class="pick-hint" id="pick-hint" hidden>Click the background colour to key it out</div>
+          </div>
+          <div class="legend">
+            <span><i class="sw frame"></i>Frame &amp; foot</span>
+            <span><i class="sw art"></i>Art</span>
+            <span><i class="sw bridge"></i>Auto bridges</span>
+            <span><i class="sw thin"></i>Too thin</span>
+            <span><i class="sw removed"></i>Removed</span>
+          </div>
+        </div>
+
+        <div class="panel" id="panel3d">
+          <div class="panel-head">
+            <h2>3D preview</h2>
+            <div class="toggles">
+              <label class="color-pick" title="Preview colour"><input type="color" id="v-color" value="#ff7a45" /></label>
+              <button class="btn ghost small" id="fit3d" type="button">Fit view</button>
+            </div>
+          </div>
+          <div class="stage" id="stage3d"></div>
+          <div class="status" id="status"></div>
+        </div>
+      </section>
+    </main>
+    <div class="busy" id="busy" hidden>Processing…</div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
