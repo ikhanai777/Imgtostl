@@ -685,3 +685,427 @@ details.section[hidden] {
 #canvas2d[data-tool='wand'] {
   cursor: cell;
 }
+
+/* ------------------------------------------------------------------------
+   Friendly UI: intro, "what to make" cards, detail switch, download guide
+   ------------------------------------------------------------------------ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ico {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -4px;
+}
+.btn .ico + span {
+  margin-left: 6px;
+}
+.examples select {
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+}
+.eyebrow {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.intro {
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.intro ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+.link {
+  background: none;
+  border: 0;
+  padding: 4px 0 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.make {
+  margin-bottom: 12px;
+}
+.make-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.make-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.make-card svg {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  color: var(--muted);
+}
+.make-card b {
+  display: block;
+  font-size: 13.5px;
+}
+.make-card small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+.make-card.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.make-card.on svg {
+  color: var(--accent);
+}
+.detail-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  margin: 4px 0 8px;
+}
+.detail-switch button,
+.view-switch button {
+  appearance: none;
+  border: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.detail-switch button.on,
+.view-switch button.on {
+  background: var(--text);
+  color: var(--bg);
+}
+/* Number the visible sections: 1 Your picture, 2 ... */
+#controls {
+  counter-reset: step;
+}
+details.section:not([hidden]) summary::before {
+  counter-increment: step;
+  content: counter(step);
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+}
+details.section summary {
+  align-items: center;
+}
+details.section summary::after {
+  margin-left: auto;
+}
+.view-switch {
+  display: none;
+}
+
+/* Download guide */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px))
+    max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  background: rgba(10, 10, 12, 0.45);
+}
+.modal[hidden] {
+  display: none;
+}
+.modal-card {
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ready {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  margin: 10px 0 12px;
+}
+.ready .ok {
+  color: var(--ok);
+}
+.ready .warn {
+  color: var(--warn);
+}
+.dl-list {
+  display: grid;
+  gap: 8px;
+}
+.dl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+.dl-item[hidden] {
+  display: none;
+}
+.dl-item small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.dl-item .btn {
+  flex: none;
+  min-width: 84px;
+}
+.tips {
+  margin-top: 14px;
+  font-size: 13px;
+}
+.tips ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+.fab {
+  display: none;
+}
+
+/* ------------------------------------------------------------------------
+   Phones: preview pinned on top (one view at a time), settings below,
+   floating Download button, bigger touch targets.
+   ------------------------------------------------------------------------ */
+@media (max-width: 760px) {
+  .topbar {
+    padding: 8px max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px));
+    gap: 8px;
+  }
+  .brand p {
+    display: none;
+  }
+  .brand svg {
+    width: 28px;
+    height: 28px;
+  }
+  .actions {
+    gap: 6px;
+  }
+  .actions .btn span {
+    display: none;
+  }
+  .actions .btn .ico {
+    margin: 0;
+  }
+  #open-download {
+    display: none;
+  }
+  .layout {
+    flex-direction: column;
+  }
+  .views {
+    order: -1;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    padding: 8px 12px;
+    height: 52svh;
+    min-height: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+  }
+  .view-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    overflow: hidden;
+    flex: none;
+  }
+  .views[data-show='2d'] #panel3d,
+  .views[data-show='3d'] #panel2d {
+    display: none;
+  }
+  .views .panel {
+    flex: 1;
+    min-height: 0;
+  }
+  .views .stage {
+    min-height: 0;
+  }
+  .panel-head h2 {
+    display: none;
+  }
+  .legend {
+    display: none;
+  }
+  .status {
+    max-height: 64px;
+    overflow-y: auto;
+  }
+  .sidebar {
+    padding: 14px max(16px, env(safe-area-inset-right, 0px)) 96px max(16px, env(safe-area-inset-left, 0px));
+  }
+  .fab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    position: fixed;
+    z-index: 20;
+    right: calc(16px + env(safe-area-inset-right, 0px));
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    padding: 12px 18px;
+    border-radius: 999px;
+    border: 0;
+    font: inherit;
+    font-weight: 600;
+    background: var(--accent);
+    color: var(--accent-ink);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  }
+  .fab:disabled {
+    opacity: 0.5;
+  }
+  .busy {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+  .dl-item {
+    flex-wrap: wrap;
+  }
+}
+
+@media (pointer: coarse) {
+  .ctl input[type='range'] {
+    height: 30px;
+  }
+  .ctl select,
+  .ctl.text input {
+    min-height: 40px;
+  }
+  .tool,
+  .btn {
+    min-height: 38px;
+  }
+  .ctl.check input {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* Phones: every toolbar is one swipeable row so the preview keeps its room. */
+@media (max-width: 760px) {
+  .panel-head {
+    padding: 4px 8px;
+    min-height: 0;
+  }
+  .panel-head .toggles {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tools {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 6px 8px;
+  }
+  .tools > * {
+    flex: none;
+  }
+  .tools-end {
+    margin-left: 0;
+  }
+  .brush span {
+    display: none;
+  }
+  .status {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    max-height: none;
+    min-height: 0;
+    padding: 6px 8px;
+    scrollbar-width: none;
+  }
+  .status .badge {
+    flex: none;
+    white-space: nowrap;
+  }
+}

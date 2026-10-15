@@ -108,13 +108,16 @@ export function renderPlacedArt(source, layout, s) {
   if (source) {
     const box = layout.artBox;
     const fit = Math.min(box.w / source.width, box.h / source.height) * s.artScale; // mm per source px
-    const cx = (s.offsetX - layout.minX) * layout.res;
-    const cy = (s.offsetY - layout.minY) * layout.res;
     ctx.imageSmoothingQuality = 'high';
-    ctx.translate(cx, cy);
-    ctx.rotate((s.rotation * Math.PI) / 180);
-    ctx.scale((s.flipX ? -1 : 1) * fit * layout.res, fit * layout.res);
-    ctx.drawImage(source, -source.width / 2, -source.height / 2);
+    // A lantern repeats the art in every cell around the wall.
+    for (const cell of layout.artCells || [{ cx: 0, cy: 0 }]) {
+      ctx.save();
+      ctx.translate((cell.cx + s.offsetX - layout.minX) * layout.res, (cell.cy + s.offsetY - layout.minY) * layout.res);
+      ctx.rotate((s.rotation * Math.PI) / 180);
+      ctx.scale((s.flipX ? -1 : 1) * fit * layout.res, fit * layout.res);
+      ctx.drawImage(source, -source.width / 2, -source.height / 2);
+      ctx.restore();
+    }
   }
   const img = ctx.getImageData(0, 0, layout.w, layout.h);
   return { ink: inkField(img.data, layout.w * layout.h, s.mode, inkOptions(s)), rgba: img };
@@ -453,8 +456,12 @@ function fillOutline(mask, w, h) {
 export function canvasToSource(source, layout, s, px, py) {
   const box = layout.artBox;
   const fit = Math.min(box.w / source.width, box.h / source.height) * s.artScale;
-  let dx = px - (s.offsetX - layout.minX) * layout.res;
-  let dy = py - (s.offsetY - layout.minY) * layout.res;
+  // Use the repeat (lantern cell) nearest to the click.
+  const mmX = layout.minX + px / layout.res;
+  const cells = layout.artCells || [{ cx: 0, cy: 0 }];
+  const cell = cells.reduce((a, c) => (Math.abs(c.cx - mmX) < Math.abs(a.cx - mmX) ? c : a));
+  let dx = px - (cell.cx + s.offsetX - layout.minX) * layout.res;
+  let dy = py - (cell.cy + s.offsetY - layout.minY) * layout.res;
   const a = (-s.rotation * Math.PI) / 180;
   [dx, dy] = [dx * Math.cos(a) - dy * Math.sin(a), dx * Math.sin(a) + dy * Math.cos(a)];
   const k = fit * layout.res;

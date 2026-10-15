@@ -134,7 +134,60 @@ function inStar(x, y, R, r) {
 /**
  * Compute the pixel canvas that holds frame, base and art.
  */
+/**
+ * Lantern: the wall is designed flat ("unrolled") and bent into a cylinder
+ * in 3D. Width = circumference at the middle of the wall.
+ */
+export function lanternGeometry(s) {
+  const D = s.lanternDiameter;
+  const t = s.lanternWall;
+  const Rm = D / 2 - t / 2;
+  const W = 2 * Math.PI * Rm;
+  const n = Math.max(1, Math.round(s.lanternRepeats));
+  return { D, t, Rm, W, H: s.lanternHeight, n, cell: W / n, band: s.lanternBand, post: s.lanternPost };
+}
+
+function computeLanternLayout(s) {
+  const res = s.resolution;
+  const g = lanternGeometry(s);
+  const minX = -g.W / 2 - 1 / res;
+  const minY = -g.H / 2 - 1 / res;
+  const w = Math.ceil(g.W * res) + 4;
+  const h = Math.ceil(g.H * res) + 4;
+  const cells = [];
+  for (let k = 0; k < g.n; k++) cells.push({ cx: -g.W / 2 + g.cell * (k + 0.5), cy: 0 });
+  const innerW = Math.max(1, (s.lanternPosts || g.n === 1 ? g.cell - g.post : g.cell) - 2);
+  const innerH = Math.max(1, g.H - 2 * g.band - 2);
+  return {
+    lantern: g,
+    res,
+    w,
+    h,
+    minX,
+    minY,
+    frameW: g.W,
+    frameH: g.H,
+    frameWidth: g.band,
+    hasFrame: true,
+    hasBase: false,
+    hasText: false,
+    baseHeight: 0,
+    hanger: null,
+    slotDepthMax: 0,
+    textBox: { cx: 0, cy: 0, w: 1, h: 0 },
+    baseTop: g.H / 2,
+    baseBottom: g.H / 2,
+    artBox: { cx: 0, cy: 0, w: innerW, h: innerH },
+    artCells: cells,
+    pxToMmX: (px) => minX + (px + 0.5) / res,
+    pxToMmY: (py) => minY + (py + 0.5) / res,
+    mmToPxX: (x) => (x - minX) * res - 0.5,
+    mmToPxY: (y) => (y - minY) * res - 0.5,
+  };
+}
+
 export function computeLayout(s) {
+  if (s.product === 'lantern') return computeLanternLayout(s);
   const res = s.resolution; // px per mm
   const [W, H] = frameSize(s);
   const hasFrame = s.frameShape !== 'none';
@@ -208,7 +261,34 @@ function rasterize(layout, test) {
   return m;
 }
 
+function lanternMasks(layout, s) {
+  const g = layout.lantern;
+  const outer = rasterize(layout, (x, y) => Math.abs(x) <= g.W / 2 && Math.abs(y) <= g.H / 2);
+  const ring = rasterize(layout, (x, y) => {
+    if (Math.abs(x) > g.W / 2 || Math.abs(y) > g.H / 2) return false;
+    if (Math.abs(y) >= g.H / 2 - g.band) return true; // top and bottom bands
+    // Posts between repeats; the seam (at the panel ends) always gets one.
+    const u = x + g.W / 2;
+    const k = Math.round(u / g.cell);
+    const isSeam = k === 0 || k === g.n;
+    return (s.lanternPosts || isSeam) && Math.abs(u - k * g.cell) <= g.post / 2;
+  });
+  const inner = andNot(outer, ring);
+  // Two holes in the top band for a wire handle, at 90° either side of the seam.
+  let hole = createMask(layout.w, layout.h);
+  if (s.lanternHandle) {
+    const r = Math.min(1.6, g.band / 2 - 1);
+    if (r > 0.6) {
+      const cy = -g.H / 2 + g.band / 2;
+      hole = rasterize(layout, (x, y) => [-g.W / 4, g.W / 4].some((cx) => (x - cx) ** 2 + (y - cy) ** 2 <= r * r));
+    }
+  }
+  const empty = createMask(layout.w, layout.h);
+  return { outer, inner, ring, base: empty, boss: empty, hole };
+}
+
 export function frameMasks(layout, s, customOuter = null) {
+  if (layout.lantern) return lanternMasks(layout, s);
   const { frameW: W, frameH: H, res } = layout;
   const outer =
     s.frameShape === 'custom' && customOuter
@@ -286,6 +366,9 @@ export function composeSolid(layout, s, artMask, extras = {}) {
   let art = s.breakout ? andNot(artMask, outer) : createMask(layout.w, layout.h);
   art = or(art, and(artMask, inner));
   if (s.breakout) art = or(art, and(artMask, ring)); // overlapping the ring is fine
+  // Cut-out lantern: a solid wall with the picture cut out, so light shines
+  // through the shapes. The wall then supports itself when printed upright.
+  if (layout.lantern && s.lanternStyle === 'cutout') art = andNot(inner, art);
   if (extras.erase) art = andNot(art, extras.erase);
   // Hand-painted material is never clipped: the user put it there on purpose.
   if (extras.add) art = or(art, extras.add);

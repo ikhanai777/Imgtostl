@@ -50,12 +50,12 @@ export const SECTIONS = [
       { key: 'autoThreshold', label: 'Auto threshold (Otsu)', type: 'checkbox', show: (s) => s.mode !== 'alpha' },
       {
         key: 'threshold',
-        label: 'Threshold',
+        label: 'Cut-off (more ↔ less detail)',
         type: 'range',
         min: 1,
         max: 254,
         step: 1,
-        show: (s) => !s.autoThreshold || s.mode === 'alpha',
+        hint: 'Moves where light turns into solid. Set automatically when you open a picture.',
       },
       { key: 'blur', label: 'Pre-blur', unit: 'mm', type: 'range', min: 0, max: 3, step: 0.05 },
       { key: 'despeckle', label: 'Remove specks under', unit: 'mm²', type: 'range', min: 0, max: 50, step: 0.5 },
@@ -76,6 +76,35 @@ export const SECTIONS = [
       { key: 'rotation', label: 'Rotate', unit: '°', type: 'range', min: -180, max: 180, step: 1 },
       { key: 'flipX', label: 'Mirror', type: 'checkbox' },
       { key: 'breakout', label: 'Let art break out of the frame', type: 'checkbox' },
+    ],
+  },
+  {
+    id: 'lantern',
+    title: 'Lantern size',
+    open: true,
+    product: 'lantern',
+    hint: 'The picture repeats around the lantern. The Design view shows the wall unrolled flat.',
+    controls: [
+      {
+        key: 'lanternStyle',
+        label: 'Light shines through',
+        type: 'select',
+        options: [
+          ['cutout', 'The picture (cut out of a solid wall)'],
+          ['silhouette', 'Around the picture (silhouette)'],
+        ],
+        hint: 'Cut-out lanterns print best standing up: the solid wall holds itself up.',
+      },
+      { key: 'lanternDiameter', label: 'Diameter', unit: 'mm', type: 'range', min: 50, max: 200, step: 1 },
+      { key: 'lanternHeight', label: 'Height', unit: 'mm', type: 'range', min: 40, max: 250, step: 1 },
+      { key: 'lanternRepeats', label: 'Picture repeats around', type: 'range', min: 1, max: 6, step: 1 },
+      { key: 'lanternPosts', label: 'Posts between repeats', type: 'checkbox' },
+      { key: 'lanternHandle', label: 'Holes for a wire handle', type: 'checkbox' },
+      { key: 'lanternWall', label: 'Wall thickness', unit: 'mm', type: 'range', min: 1.2, max: 4, step: 0.1 },
+      { key: 'lanternBand', label: 'Top & bottom band', unit: 'mm', type: 'range', min: 3, max: 20, step: 0.5 },
+      { key: 'lanternPost', label: 'Post width', unit: 'mm', type: 'range', min: 2, max: 12, step: 0.5 },
+      { key: 'candleDiameter', alias: 'lanternCandle', label: 'Tealight pocket', unit: 'mm', type: 'range', min: 30, max: 60, step: 0.5, hint: 'Standard tealights are 38–39 mm. Use LED tealights: PLA softens near a flame.' },
+      { key: 'candleLift', alias: 'lanternLift', label: 'Raise the light', unit: 'mm', type: 'range', min: 0, max: 60, step: 1 },
     ],
   },
   {
@@ -339,30 +368,74 @@ export const SECTIONS = [
 export const PRESETS = {
   ornament: {
     label: 'Ornament disc',
-    values: { frameShape: 'circle', width: 80, frameWidth: 3.5, baseStyle: 'foot', baseWidth: 50, baseHeight: 5, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'block' },
+    values: { product: 'frame', frameShape: 'circle', width: 80, frameWidth: 3.5, baseStyle: 'foot', baseWidth: 50, baseHeight: 5, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'block' },
   },
   plaque: {
     label: 'Desk plaque',
-    values: { frameShape: 'rect', width: 120, height: 90, cornerRadius: 8, frameWidth: 5, baseStyle: 'foot', baseWidth: 120, baseHeight: 6, footDepth: 30, footPosition: 'center', artThickness: 3, frameThickness: 4, stand: false, standType: 'none' },
+    values: { product: 'frame', frameShape: 'rect', width: 120, height: 90, cornerRadius: 8, frameWidth: 5, baseStyle: 'foot', baseWidth: 120, baseHeight: 6, footDepth: 30, footPosition: 'center', artThickness: 3, frameThickness: 4, stand: false, standType: 'none' },
   },
   window: {
     label: 'Arch window',
-    values: { frameShape: 'arch', width: 90, height: 130, frameWidth: 5, baseStyle: 'foot', baseWidth: 100, baseHeight: 8, footDepth: 35, footPosition: 'center', artThickness: 3, frameThickness: 5, stand: false, standType: 'none' },
+    values: { product: 'frame', frameShape: 'arch', width: 90, height: 130, frameWidth: 5, baseStyle: 'foot', baseWidth: 100, baseHeight: 8, footDepth: 35, footPosition: 'center', artThickness: 3, frameThickness: 5, stand: false, standType: 'none' },
   },
   shadowbox: {
     label: 'Shadow box',
-    values: { frameShape: 'rect', width: 130, height: 100, cornerRadius: 4, frameWidth: 5, baseStyle: 'foot', baseWidth: 130, baseHeight: 6, footDepth: 0, artThickness: 1.6, frameThickness: 6, layers: 3, layerStep: 1.4, stand: true, standType: 'block' },
+    values: { product: 'frame', frameShape: 'rect', width: 130, height: 100, cornerRadius: 4, frameWidth: 5, baseStyle: 'foot', baseWidth: 130, baseHeight: 6, footDepth: 0, artThickness: 1.6, frameThickness: 6, layers: 3, layerStep: 1.4, stand: true, standType: 'block' },
   },
   penholder: {
     label: 'Pen holder',
-    values: { frameShape: 'circle', width: 90, frameWidth: 4, baseStyle: 'foot', baseWidth: 60, baseHeight: 6, footDepth: 0, artThickness: 3, frameThickness: 4, stand: true, standType: 'pencil' },
+    values: { product: 'frame', frameShape: 'circle', width: 90, frameWidth: 4, baseStyle: 'foot', baseWidth: 60, baseHeight: 6, footDepth: 0, artThickness: 3, frameThickness: 4, stand: true, standType: 'pencil' },
+  },
+  roundLantern: {
+    label: 'Round lantern',
+    values: { product: 'lantern', lanternStyle: 'cutout', lanternDiameter: 80, lanternHeight: 100, lanternRepeats: 3, lanternPosts: true, lanternHandle: true, layers: 1 },
+  },
+  tallLantern: {
+    label: 'Tall lantern',
+    values: { product: 'lantern', lanternStyle: 'silhouette', lanternDiameter: 90, lanternHeight: 160, lanternRepeats: 4, lanternPosts: true, lanternHandle: true, layers: 1 },
   },
   lantern: {
-    label: 'Tealight lantern',
-    values: { frameShape: 'arch', width: 90, height: 120, frameWidth: 5, baseStyle: 'foot', baseWidth: 70, baseHeight: 6, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'candle' },
+    label: 'Tealight frame',
+    values: { product: 'frame', frameShape: 'arch', width: 90, height: 120, frameWidth: 5, baseStyle: 'foot', baseWidth: 70, baseHeight: 6, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'candle' },
   },
   cutout: {
     label: 'Laser / Cricut SVG',
-    values: { frameShape: 'none', width: 120, height: 120, cornerRadius: 0, baseStyle: 'none', islandMode: 'bridge', stand: false, standType: 'none' },
+    values: { product: 'frame', frameShape: 'none', width: 120, height: 120, cornerRadius: 0, baseStyle: 'none', islandMode: 'bridge', stand: false, standType: 'none' },
   },
 };
+
+// ---------------------------------------------------------------------------
+// Friendly titles, what each product shows, and the Simple view.
+// ---------------------------------------------------------------------------
+const TITLES = {
+  image: 'Your picture',
+  place: 'Position the picture',
+  lantern: 'Lantern size',
+  frame: 'Frame',
+  stand: 'Base & holder',
+  text: 'Name or message',
+  print: 'Make it printable',
+  model: 'Colours & 3D',
+};
+const PRODUCT = { frame: 'frame', stand: 'frame', text: 'frame', lantern: 'lantern' };
+// Controls that only make sense for a framed piece.
+const FRAME_ONLY = new Set(['colorMode', 'orientation', 'bevel', 'artThickness', 'frameThickness', 'breakout']);
+// Shown in the Simple view; everything else lives under "All settings".
+const SIMPLE = new Set([
+  'bgActions', 'invert', 'threshold', 'lineWeight',
+  'artScale', 'rotation', 'flipX',
+  'lanternStyle', 'lanternDiameter', 'lanternHeight', 'lanternRepeats', 'lanternPosts', 'lanternHandle',
+  'frameShape', 'frameActions', 'width', 'height', 'frameWidth', 'doubleRing', 'hanger',
+  'standType', 'containerHeight', 'compartments', 'drainHole', 'candleDiameter',
+  'text', 'textMode', 'textFont',
+  'bridgeStyle', 'fixThin',
+  'colorMode', 'layers', 'printer',
+]);
+for (const sec of SECTIONS) {
+  sec.title = TITLES[sec.id] || sec.title;
+  sec.product = PRODUCT[sec.id] || null;
+  for (const c of sec.controls) {
+    c.simple = SIMPLE.has(c.alias || c.key);
+    if (FRAME_ONLY.has(c.key)) c.product = 'frame';
+  }
+}

@@ -25,6 +25,21 @@ import {
 } from './image.js';
 
 const STORAGE_KEY = 'imgtostl:settings:v1';
+const UI_KEY = 'imgtostl:ui:v1';
+const ui = (() => {
+  try {
+    return { detail: 'simple', intro: true, ...JSON.parse(localStorage.getItem(UI_KEY) || '{}') };
+  } catch {
+    return { detail: 'simple', intro: true };
+  }
+})();
+function saveUi() {
+  try {
+    localStorage.setItem(UI_KEY, JSON.stringify(ui));
+  } catch {
+    /* storage unavailable */
+  }
+}
 const $ = (id) => document.getElementById(id);
 
 // ---------------------------------------------------------------------------
@@ -160,9 +175,23 @@ function buildControl(c) {
 
 function syncControls() {
   const s = state.s;
-  for (const { sec, det } of sectionEls) det.hidden = sec.show ? !sec.show(s) : false;
+  const all = ui.detail === 'all';
   for (const { def, wrap } of controlEls.values()) {
-    wrap.hidden = def.show ? !def.show(s) : false;
+    wrap.hidden =
+      (def.show ? !def.show(s) : false) || (!all && !def.simple) || (def.product && def.product !== s.product);
+  }
+  for (const { sec, det } of sectionEls) {
+    const hasVisible = [...det.querySelectorAll('.ctl')].some((el) => !el.hidden);
+    det.hidden = (sec.show ? !sec.show(s) : false) || (sec.product && sec.product !== s.product) || !hasVisible;
+  }
+  for (const b of document.querySelectorAll('[data-product]')) {
+    const on = b.dataset.product === s.product;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on);
+  }
+  for (const b of document.querySelectorAll('[data-detail]')) b.classList.toggle('on', b.dataset.detail === ui.detail);
+  $('title2d').textContent = s.product === 'lantern' ? 'Design · lantern wall, unrolled' : 'Design';
+  for (const { def, wrap } of controlEls.values()) {
     const v = s[def.key];
     if (def.type === 'actions') continue;
     if (def.type === 'checkbox') wrap.querySelector('input').checked = !!v;
@@ -182,6 +211,9 @@ function syncControls() {
 }
 
 function set(patch, { rerun = true } = {}) {
+  // Moving the cut-off by hand turns automatic mode off.
+  if ('threshold' in patch && !('autoThreshold' in patch)) patch.autoThreshold = false;
+  if ('product' in patch && patch.product !== state.s.product) preview3d.fitted = false;
   if ('standType' in patch && patch.standType !== state.s.standType) {
     // Picking a holder: switch the stand on/off and size it to the piece.
     patch.stand = patch.standType !== 'none';
@@ -241,7 +273,7 @@ async function run() {
     const m = build3D(wasm, draft ? { ...s, bevel: 0 } : s, r);
     m.draft = draft;
     state.result3d = m;
-    preview3d.setOptions({ orientation: s.orientation });
+    preview3d.setOptions({ orientation: s.product === 'lantern' ? 'upright' : s.orientation });
     preview3d.show(m.previewMesh, m.standMesh, m.partMeshes, m.standProps);
     renderStatus();
     if (draft) {
@@ -425,9 +457,11 @@ function renderStatus() {
   const s = state.s;
   const badges = [];
   if (!r) return;
-  if (!state.source) badges.push(['', 'No image yet — open one or try a sample']);
-  if (r.stats.pieces === 1) badges.push(['ok', '✓ One solid piece — nothing falls out']);
-  else if (r.stats.pieces > 1) badges.push(['bad', `⚠ ${r.stats.pieces} separate pieces`]);
+  if (!state.source) badges.push(['', 'No picture yet: open one or try an example']);
+  if (r.stats.pieces === 1) badges.push(['ok', '✓ One solid piece, nothing falls out']);
+  else if (r.stats.pieces > 1) badges.push(['bad', `⚠ ${r.stats.pieces} loose pieces: set "Floating parts" to auto-bridge`]);
+  if (r.stats.openingTop > 15)
+    badges.push(['warn', `⚠ An opening is ${r.stats.openingTop.toFixed(0)} mm wide at its top; it may droop when printed. Try more repeats or a smaller picture.`]);
   if (r.stats.bridges) badges.push(['', `${r.stats.bridges} bridge${r.stats.bridges > 1 ? 's' : ''} added`]);
   if (r.stats.removed) badges.push(['warn', `${r.stats.removed} speck${r.stats.removed > 1 ? 's' : ''} dropped`]);
   if (r.stats.layers > 1) badges.push(['', `${r.stats.layers} depth layers`]);
@@ -441,20 +475,20 @@ function renderStatus() {
   if (state.strokes.length) badges.push(['', `${state.strokes.length} hand edit${state.strokes.length > 1 ? 's' : ''}`]);
   if (r.stats.thickenedArea > 0.5) badges.push(['', `${r.stats.thickenedArea.toFixed(0)} mm² thickened`]);
   if (r.stats.thinArea > 0.5)
-    badges.push(['warn', `⚠ ${r.stats.thinArea.toFixed(0)} mm² thinner than ${s.minFeature} mm`]);
+    badges.push(['warn', `⚠ Some parts are thinner than ${s.minFeature} mm (orange): try "Thicken only the too-thin parts"`]);
   if (m) {
     const bb = m.info.bbox;
     const size = [bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]];
     badges.push(['', `${size.map((v) => v.toFixed(1)).join(' × ')} mm`]);
     const cm3 = m.info.volume / 1000;
     badges.push(['', `${cm3.toFixed(1)} cm³ ≈ ${(cm3 * 1.24).toFixed(0)} g PLA`]);
-    badges.push(['', `${m.info.triangles.toLocaleString()} triangles`]);
-    if (m.info.status === 'NoError') badges.push(['ok', '✓ Watertight']);
-    else badges.push(['bad', `Mesh: ${m.info.status}`]);
+    if (m.info.status === 'NoError') badges.push(['ok', '✓ Ready to print']);
+    else badges.push(['bad', `Model problem: ${m.info.status}`]);
     if (m.stand) badges.push(['', `${standLabel()} ≈ ${((m.info.standVolume / 1000) * 1.24).toFixed(0)} g`]);
     // Printer bed check, in the orientation the STL is exported in.
     const [, pname, bed] = printerById(s.printer);
-    const parts = [s.orientation === 'upright' ? [size[0], size[2], size[1]] : size];
+    const upright = s.product === 'lantern' || s.orientation === 'upright';
+    const parts = [upright ? [size[0], size[2], size[1]] : size];
     const sb = m.info.standBox;
     if (sb) parts.push([sb.max[0] - sb.min[0], sb.max[2] - sb.min[2], sb.max[1] - sb.min[1]]);
     const worst = parts.map((p) => fitsBed(p, bed)).reduce((a, b) => (b.scale < a.scale ? b : a));
@@ -463,22 +497,71 @@ function renderStatus() {
     else badges.push(['bad', `⚠ Too big for ${short}: scale to ${Math.floor(worst.scale * 100)}%`]);
   }
   $('status').innerHTML = badges.map(([cls, t]) => `<span class="badge ${cls}">${escapeHtml(t)}</span>`).join('');
+  state.badges = badges;
 }
 
 function updateButtons() {
   const has = !!state.result3d;
+  $('open-download').disabled = !has;
+  $('fab-download').disabled = !has;
   $('save-project').disabled = !state.source;
   $('dl-stl').disabled = !has;
-  $('dl-stl').textContent = state.s.colorMode === 'parts' ? 'Download 3MF' : 'Download STL';
-  const parts = state.s.colorMode === 'parts';
+  const parts = state.s.colorMode === 'parts' && state.s.product !== 'lantern';
+  $('dl-stl').textContent = parts ? 'Download 3MF' : 'Download STL';
   $('v-color2').closest('label').hidden = !parts;
   $('v-color3').closest('label').hidden = !(parts && state.result3d?.parts?.some((p) => p.color === 3));
   $('dl-svg').disabled = !(state.result2d && state.result2d.solidPolys.length);
   const stand = $('dl-stand');
-  stand.hidden = !(state.result3d && state.result3d.stand);
-  stand.textContent = `${standLabel()} STL`;
-  stand.disabled = stand.hidden;
+  const hasStand = !!(state.result3d && state.result3d.stand);
+  $('dl-stand-row').hidden = !hasStand;
+  $('dl-stand-title').textContent = standLabel();
+  stand.textContent = 'STL';
+  stand.disabled = !hasStand;
 }
+
+const TIPS = {
+  frame: [
+    'Print the piece lying flat, front side up. No supports needed.',
+    'PLA, 0.2 mm layers, 2–3 walls, 15–20% infill.',
+  ],
+  lantern: [
+    'Print standing up on its floor. No supports needed for small openings.',
+    'PLA or PETG, 0.2 mm layers, 2 walls. Slow down for the bridges over the openings.',
+    'Use an LED tealight. PLA softens at about 60 °C, so never use a real flame.',
+  ],
+  stand: 'Print the holder open side up. Test the slot fit with a short print first if your printer runs tight.',
+  parts: 'The 3MF loads as one object with coloured parts. Assign a filament to each part in your slicer.',
+};
+
+function openDownload() {
+  if (!state.result3d) return;
+  updateButtons();
+  const s = state.s;
+  const ok = (state.badges || []).filter(([c]) => c === 'ok').map(([, t]) => t.replace('✓ ', ''));
+  const warn = (state.badges || []).filter(([c]) => c === 'warn' || c === 'bad').map(([, t]) => t.replace('⚠ ', ''));
+  $('dl-ready').innerHTML =
+    (ok.length ? `<span class="ok">✓ ${escapeHtml(ok.join(' · '))}</span>` : '') +
+    (warn.length ? `<span class="warn">Check first: ${escapeHtml(warn.join(' · '))}</span>` : '');
+  $('dl-main-title').textContent = s.product === 'lantern' ? 'Lantern (3D print file)' : '3D print file';
+  const tips = [...TIPS[s.product === 'lantern' ? 'lantern' : 'frame']];
+  if (state.result3d.stand) tips.push(TIPS.stand);
+  if (state.result3d.parts) tips.push(TIPS.parts);
+  $('dl-tips').innerHTML = `<b>Printing tips</b><ul>${tips.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`;
+  $('dl-modal').hidden = false;
+  $('dl-close').focus();
+}
+function closeDownload() {
+  $('dl-modal').hidden = true;
+}
+$('open-download').addEventListener('click', openDownload);
+$('fab-download').addEventListener('click', openDownload);
+$('dl-close').addEventListener('click', closeDownload);
+$('dl-modal').addEventListener('click', (e) => {
+  if (e.target === $('dl-modal')) closeDownload();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('dl-modal').hidden) closeDownload();
+});
 
 // ---------------------------------------------------------------------------
 // Image input
@@ -596,13 +679,46 @@ document.addEventListener('paste', (e) => {
 });
 
 for (const [key, { label }] of Object.entries(SAMPLES)) {
-  const b = document.createElement('button');
-  b.className = 'btn ghost';
-  b.textContent = label;
-  b.title = 'Load sample artwork';
-  b.addEventListener('click', () => useSource(sampleCanvas(key), key));
-  $('samples').appendChild(b);
+  const o = document.createElement('option');
+  o.value = key;
+  o.textContent = label;
+  $('examples').appendChild(o);
 }
+$('examples').addEventListener('change', (e) => {
+  const key = e.target.value;
+  e.target.value = '';
+  if (key) useSource(sampleCanvas(key), key);
+});
+
+// What to make, Simple / All settings, intro.
+for (const b of document.querySelectorAll('[data-product]')) {
+  b.addEventListener('click', () => set({ product: b.dataset.product }));
+}
+for (const b of document.querySelectorAll('[data-detail]')) {
+  b.addEventListener('click', () => {
+    ui.detail = b.dataset.detail;
+    saveUi();
+    syncControls();
+  });
+}
+$('intro').hidden = !ui.intro;
+$('intro-hide').addEventListener('click', () => {
+  ui.intro = false;
+  saveUi();
+  $('intro').hidden = true;
+});
+
+// Phones show one preview at a time.
+function showView(which) {
+  $('views').dataset.show = which;
+  for (const b of document.querySelectorAll('[data-view]')) {
+    const on = b.dataset.view === which;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on);
+  }
+}
+for (const b of document.querySelectorAll('[data-view]')) b.addEventListener('click', () => showView(b.dataset.view));
+showView('2d');
 
 for (const [, preset] of Object.entries(PRESETS)) {
   const b = document.createElement('button');
@@ -917,6 +1033,7 @@ $('v-turn').addEventListener('change', (e) => setView({ turntable: e.target.chec
 $('v-props').addEventListener('change', (e) => setView({ props: e.target.checked }));
 setView({ ...view });
 $('fit3d').addEventListener('click', () => preview3d.fit());
+$('dl-png').addEventListener('click', () => $('snap3d').click());
 $('snap3d').addEventListener('click', async () => {
   if (!state.result3d) return;
   const blob = await preview3d.snapshot(2);
@@ -975,7 +1092,9 @@ function standLabel() {
 }
 
 function baseName() {
-  return `${state.sourceName}-${state.s.frameShape}-${Math.round(state.s.width)}mm`;
+  const s = state.s;
+  if (s.product === 'lantern') return `${state.sourceName}-lantern-${Math.round(s.lanternDiameter)}mm`;
+  return `${state.sourceName}-${s.frameShape}-${Math.round(s.width)}mm`;
 }
 
 function stlFiles({ withStand }) {

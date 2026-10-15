@@ -1,6 +1,6 @@
 // Every exported solid must weld into a closed 2-manifold: each edge shared by
 // exactly two triangles once vertices are merged by position (as slicers do).
-import { it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import Module from 'manifold-3d';
 import { createMask, drawCapsule } from '../src/core/mask.js';
 import { computeLayout } from '../src/core/compose.js';
@@ -122,3 +122,57 @@ for (const [type] of STAND_TYPES.filter(([t]) => t !== 'none')) {
     m.dispose();
   });
 }
+
+describe('lantern', () => {
+  for (const cfg of [{ lanternRepeats: 3 }, { lanternRepeats: 1, lanternPosts: false }, { lanternRepeats: 4, layers: 2, lanternHandle: false }]) {
+    it(`bends into a clean one-piece lantern ${JSON.stringify(cfg)}`, () => {
+      const s = { ...DEFAULTS, resolution: 4, product: 'lantern', ...cfg };
+      const layout = computeLayout(s);
+      expect(layout.artCells.length).toBe(s.lanternRepeats);
+      const ink = new Float32Array(layout.w * layout.h);
+      for (let py = 0; py < layout.h; py++)
+        for (let px = 0; px < layout.w; px++) {
+          const x = layout.pxToMmX(px), y = layout.pxToMmY(py);
+          // a tree trunk in each cell + a floating star
+          for (const c of layout.artCells) {
+            if (Math.abs(x - c.cx) < 3 && y > 0) ink[py * layout.w + px] = 150;
+            if ((x - c.cx - 10) ** 2 + (y + 25) ** 2 < 16) ink[py * layout.w + px] = 250;
+          }
+        }
+      const r = build2D(s, layout, ink, 100);
+      expect(r.stats.pieces).toBe(1);
+      expect(r.stats.openingTop).toBeGreaterThan(5);
+      const m = build3D(wasm, s, r);
+      expect(m.info.status).toBe('NoError');
+      expect(m.info.genus).toBeGreaterThan(0); // openings make it a high-genus solid
+      const bb = m.info.bbox;
+      expect(bb.max[0] - bb.min[0]).toBeCloseTo(s.lanternDiameter, 0);
+      expect(bb.max[1] - bb.min[1]).toBeCloseTo(s.lanternHeight, 0);
+      const exp = m.exportPiece();
+      expect(badEdges(exp)).toBe(0);
+      expect(exp.size[2]).toBeCloseTo(s.lanternHeight, 0); // stands on its floor
+      expect(m.standProps.candle).toBeTruthy();
+      m.dispose();
+    });
+  }
+});
+
+it('cut-out lantern: solid wall with the picture as openings', () => {
+  const base = { ...DEFAULTS, resolution: 4, product: 'lantern', lanternRepeats: 3 };
+  const layout = computeLayout(base);
+  const ink = new Float32Array(layout.w * layout.h);
+  for (let py = 0; py < layout.h; py++)
+    for (let px = 0; px < layout.w; px++) {
+      const x = layout.pxToMmX(px), y = layout.pxToMmY(py);
+      for (const c of layout.artCells) if ((x - c.cx) ** 2 + y ** 2 < 144) ink[py * layout.w + px] = 255; // a 24 mm moon
+    }
+  const sil = build2D({ ...base, lanternStyle: 'silhouette' }, layout, ink, 128);
+  const cut = build2D({ ...base, lanternStyle: 'cutout' }, layout, ink, 128);
+  // The cut-out wall has far more material and only moon-sized openings.
+  expect(cut.stats.openingTop).toBeLessThan(sil.stats.openingTop);
+  expect(cut.stats.pieces).toBe(1);
+  const m = build3D(wasm, { ...base, lanternStyle: 'cutout' }, cut);
+  expect(m.info.status).toBe('NoError');
+  expect(badEdges(m.exportPiece())).toBe(0);
+  m.dispose();
+});

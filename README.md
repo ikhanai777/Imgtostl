@@ -4,7 +4,25 @@ A browser app that turns any image into 2D silhouette art inside a frame, ready 
 
 Everything runs locally in the browser. Your images are never uploaded.
 
+## Using it
+
+1. **Pick a picture**: open a photo, drawing or logo, paste one, or choose an example.
+2. **Choose what to make**: a *framed silhouette* that stands on a shelf, or a round *lantern*. Quick starts set everything up in one click.
+3. **Adjust** in the numbered steps. **Simple** shows only the settings most people need; **All settings** shows everything.
+4. **Download**: one button opens a short guide. It explains each file (the 3D print file, the holder, the SVG cutting file, a PNG picture and the project file) and gives printing tips for what you made.
+
+It works on phones and tablets too. The preview stays pinned at the top with a Design / 3D switch, the settings scroll underneath, and a floating Download button stays in reach.
+
 ## Features
+
+**Lanterns**
+- The picture repeats 1–6 times around a round lantern, with optional posts between repeats and holes for a wire handle.
+- The lantern prints standing up in one piece, with a floor and a raised tealight pocket.
+- *Cut-out style* (the default) is a solid wall with the picture cut out, so light shines through the shapes. The solid wall holds itself up while printing.
+- *Silhouette style* keeps the picture solid and lets light through around it.
+- Printed standing up, the top of every opening is a bridge, so the app warns you about openings too wide to bridge cleanly.
+- The Design view shows the wall unrolled flat. The 3D view bends it into a cylinder with exact geometry.
+
 
 **Image → silhouette**
 - Open a PNG, JPG, WebP or SVG by file picker, drag & drop or paste (Ctrl/Cmd+V).

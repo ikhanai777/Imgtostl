@@ -5,6 +5,7 @@ import { cleanArt, composeSolid, strokeMasks } from './compose.js';
 import { traceMask } from './trace.js';
 import { bottomMm, buildPiece, extractMesh, extractParts, freeAll, loopsToPolygons } from './mesh.js';
 import { buildFunctionalStand } from './stands.js';
+import { buildLantern, widestOpeningTop } from './lantern.js';
 import { and, andNot, components, countSolid, removeSmallSolids } from './mask.js';
 
 export const DEFAULTS = {
@@ -75,6 +76,17 @@ export const DEFAULTS = {
   colorMode: 'single', // single | parts | height
   // background removal
   wandTolerance: 40,
+  // what to make
+  product: 'frame', // frame | lantern
+  lanternDiameter: 80,
+  lanternHeight: 100,
+  lanternWall: 2,
+  lanternRepeats: 3,
+  lanternBand: 7,
+  lanternPost: 4,
+  lanternPosts: true,
+  lanternHandle: true,
+  lanternStyle: 'cutout', // cutout (light through the picture) | silhouette
   // hanging
   hanger: 'none', // none | loop | hole
   hangerHole: 4, // mm
@@ -160,6 +172,7 @@ export function build2D(s, layout, ink, cut, extras = {}) {
       vertices: solidPolys.reduce((n, p) => n + p.length, 0),
       contours: solidPolys.length,
       layers: 1 + layers.filter((l) => l.polys.length).length,
+      openingTop: layout.lantern ? widestOpeningTop(composed.solid, layout) : 0,
     },
   };
 }
@@ -226,6 +239,7 @@ function depthLayers(s, field, cut, composed) {
 }
 
 export function build3D(wasm, s, r) {
+  if (r.layout.lantern) return buildLantern3D(wasm, s, r);
   const raised = s.frameThickness > s.artThickness + 1e-6;
   const slab = Math.max(s.artThickness, raised ? s.frameThickness : 0);
   const foot =
@@ -376,4 +390,40 @@ function splitParts(wasm, piece, r, text) {
   const parts = out.filter((p) => !p.manifold.isEmpty());
   parts.garbage = garbage;
   return parts;
+}
+
+function buildLantern3D(wasm, s, r) {
+  const lan = buildLantern(wasm, r.layout.lantern, {
+    solidPolys: r.solidPolys,
+    layers: r.layers,
+    artThickness: s.artThickness,
+    candleDiameter: s.candleDiameter,
+    candleLift: s.candleLift,
+    floor: 2.4,
+  });
+  const m = lan.manifold;
+  return {
+    piece: lan,
+    stand: null,
+    parts: null,
+    partMeshes: null,
+    info: {
+      colorChanges: [],
+      volume: m.volume(),
+      genus: m.genus(),
+      status: m.status(),
+      triangles: m.numTri(),
+      bbox: m.boundingBox(),
+      standVolume: 0,
+      standBox: null,
+    },
+    previewMesh: extractMeshRaw(m),
+    standMesh: null,
+    standProps: lan.props,
+    // Lanterns always print standing on their floor.
+    exportPiece: () => extractMesh(m, 'upright'),
+    exportParts: () => null,
+    exportStand: () => null,
+    dispose: () => freeAll(lan.garbage),
+  };
 }
