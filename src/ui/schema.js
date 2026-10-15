@@ -1,3 +1,5 @@
+import { PRINTERS } from '../core/printers.js';
+
 // Declarative control definitions. `show(s)` hides irrelevant controls.
 const hasHeight = (s) => ['oval', 'rect', 'arch', 'none'].includes(s.frameShape);
 const hasBase = (s) => s.baseStyle !== 'none';
@@ -74,6 +76,19 @@ export const SECTIONS = [
       { key: 'width', label: 'Width', unit: 'mm', type: 'range', min: 20, max: 300, step: 1 },
       { key: 'height', label: 'Height', unit: 'mm', type: 'range', min: 20, max: 300, step: 1, show: hasHeight },
       { key: 'frameWidth', label: 'Frame thickness', unit: 'mm', type: 'range', min: 1, max: 20, step: 0.5, show: (s) => s.frameShape !== 'none' },
+      {
+        key: 'hanger',
+        label: 'Hanging',
+        type: 'select',
+        options: [
+          ['none', 'None'],
+          ['loop', 'Loop on top (ornament / keychain)'],
+          ['hole', 'Hole through the frame top'],
+        ],
+        show: (s) => s.frameShape !== 'none',
+      },
+      { key: 'hangerHole', label: 'Hole diameter', unit: 'mm', type: 'range', min: 2, max: 12, step: 0.5, show: (s) => s.frameShape !== 'none' && s.hanger !== 'none' },
+      { key: 'hangerWall', label: 'Loop wall', unit: 'mm', type: 'range', min: 1.2, max: 6, step: 0.1, show: (s) => s.frameShape !== 'none' && s.hanger !== 'none' },
       { key: 'cornerRadius', label: 'Corner radius', unit: 'mm', type: 'range', min: 0, max: 60, step: 0.5, show: (s) => s.frameShape === 'rect' || s.frameShape === 'none' },
     ],
   },
@@ -114,6 +129,18 @@ export const SECTIONS = [
         ],
         show: (s) => hasBase(s) && s.footDepth > 0,
       },
+      {
+        key: 'pocketDiameter',
+        label: 'Pocket under foot',
+        unit: 'mm',
+        type: 'range',
+        min: 0,
+        max: 30,
+        step: 0.5,
+        show: (s) => hasBase(s) && s.footDepth > Math.max(s.artThickness, s.frameThickness),
+        hint: 'For a magnet or coins as extra weight. 0 = off.',
+      },
+      { key: 'pocketDepth', label: 'Pocket depth', unit: 'mm', type: 'range', min: 0.5, max: 15, step: 0.5, show: (s) => hasBase(s) && s.footDepth > Math.max(s.artThickness, s.frameThickness) && s.pocketDiameter > 0 },
       { key: 'stand', label: 'Generate separate slot stand', type: 'checkbox', show: (s) => hasBase(s) && !(s.footDepth > Math.max(s.artThickness, s.frameThickness)) },
       { key: 'standDepth', label: 'Stand depth', unit: 'mm', type: 'range', min: 10, max: 80, step: 1, show: (s) => hasBase(s) && s.stand },
       { key: 'standHeight', label: 'Stand height', unit: 'mm', type: 'range', min: 5, max: 40, step: 0.5, show: (s) => hasBase(s) && s.stand },
@@ -175,6 +202,7 @@ export const SECTIONS = [
       },
       { key: 'bridgeWidth', label: 'Bridge width', unit: 'mm', type: 'range', min: 0.8, max: 8, step: 0.1, show: (s) => s.islandMode === 'bridge' },
       { key: 'minIsland', label: 'Drop islands under', unit: 'mm²', type: 'range', min: 0, max: 40, step: 0.5 },
+      { key: 'fixThin', label: 'Thicken only the too-thin parts', type: 'checkbox', show: (s) => s.minFeature > 0 },
       { key: 'minFeature', label: 'Warn below feature size', unit: 'mm', type: 'range', min: 0, max: 4, step: 0.1, hint: 'Usually 2–3× your nozzle width' },
     ],
   },
@@ -195,6 +223,13 @@ export const SECTIONS = [
       },
       { key: 'layerStep', label: 'Height per layer', unit: 'mm', type: 'range', min: 0.4, max: 5, step: 0.1, show: (s) => s.layers > 1 },
       { key: 'frameThickness', label: 'Frame + foot thickness', unit: 'mm', type: 'range', min: 0.6, max: 30, step: 0.1, hint: 'Thicker than the art = raised frame' },
+      { key: 'bevel', label: 'Bevelled front edge', unit: 'mm', type: 'range', min: 0, max: 2, step: 0.1, hint: 'A small chamfer on the front edges. 0 = sharp.' },
+      {
+        key: 'printer',
+        label: 'Your printer (bed size check)',
+        type: 'select',
+        options: PRINTERS.map(([id, name, [x, y]]) => [id, `${name} · ${x}×${y}`]),
+      },
       {
         key: 'orientation',
         label: 'STL orientation',

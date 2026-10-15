@@ -83,7 +83,16 @@ export function computeLayout(s) {
   const baseBottom = hasBase ? H / 2 + baseHeight : H / 2;
   const minX = -Math.max(W / 2 + margin, hasBase ? s.baseWidth / 2 : 0) - 1 / res;
   const maxX = -minX;
-  const minY = -H / 2 - margin - 1 / res;
+  // Hanging loop above the frame, or a reinforced hole through its top.
+  let hanger = null;
+  if (hasFrame && (s.hanger === 'loop' || s.hanger === 'hole')) {
+    const holeR = s.hangerHole / 2;
+    const outerR = holeR + s.hangerWall;
+    const cy = s.hanger === 'loop' ? -H / 2 - holeR - 0.5 : -H / 2 + fw / 2;
+    hanger = { type: s.hanger, cx: 0, cy, holeR, outerR };
+  }
+  const top = Math.min(-H / 2 - margin, hanger ? hanger.cy - hanger.outerR : Infinity);
+  const minY = top - 1 / res;
   const maxY = Math.max(baseBottom, H / 2 + margin) + 1 / res;
   const w = Math.ceil((maxX - minX) * res) + 2;
   const h = Math.ceil((maxY - minY) * res) + 2;
@@ -103,6 +112,7 @@ export function computeLayout(s) {
     hasBase,
     hasText,
     baseHeight,
+    hanger,
     // Text box (mm, y down): centred in the part of the foot below the frame.
     slotDepthMax: hasText ? Math.max(1, baseHeight - textBlock) : baseHeight,
     textBox: { cx: 0, cy: H / 2 + (baseHeight - slotReserve) / 2, w: Math.max(1, (s.baseWidth || 0) - 2 * TEXT_MARGIN), h: s.textSize || 0 },
@@ -147,7 +157,15 @@ export function frameMasks(layout, s) {
     // Never let the base intrude into the art opening.
     base = andNot(base, inner);
   }
-  return { outer, inner, ring, base };
+  let boss = createMask(layout.w, layout.h);
+  let hole = createMask(layout.w, layout.h);
+  const hg = layout.hanger;
+  if (hg) {
+    const d2 = (x, y) => (x - hg.cx) ** 2 + (y - hg.cy) ** 2;
+    boss = rasterize(layout, (x, y) => d2(x, y) <= hg.outerR ** 2);
+    hole = rasterize(layout, (x, y) => d2(x, y) <= hg.holeR ** 2);
+  }
+  return { outer, inner, ring, base, boss, hole };
 }
 
 /**
@@ -169,8 +187,8 @@ export function cleanArt(art, s) {
  * Compose frame + art, then make everything one connected printable piece.
  */
 export function composeSolid(layout, s, artMask, extras = {}) {
-  const { outer, inner, ring, base } = frameMasks(layout, s);
-  let anchor = or(ring, base);
+  const { outer, inner, ring, base, boss, hole } = frameMasks(layout, s);
+  let anchor = or(or(ring, base), boss);
   let art = s.breakout ? andNot(artMask, outer) : createMask(layout.w, layout.h);
   art = or(art, and(artMask, inner));
   if (s.breakout) art = or(art, and(artMask, ring)); // overlapping the ring is fine
@@ -191,14 +209,25 @@ export function composeSolid(layout, s, artMask, extras = {}) {
     bridgeRadius: Math.max(1, (s.bridgeWidth * res) / 2),
     minIslandArea: s.minIsland * res * res,
   });
-  const solid = islands.mask;
+  let solid = islands.mask;
 
   // Thin-feature analysis: anything that disappears under a morphological
   // opening of radius minFeature/2 is thinner than minFeature.
-  let thin = createMask(layout.w, layout.h);
-  if (s.minFeature > 0) thin = andNot(solid, open(solid, (s.minFeature * res) / 2));
+  const thinOf = (m) => (s.minFeature > 0 ? andNot(m, open(m, (s.minFeature * res) / 2)) : createMask(layout.w, layout.h));
+  let thin = thinOf(solid);
+  let thickened = createMask(layout.w, layout.h);
+  if (s.fixThin && s.minFeature > 0) {
+    // Grow only the too-thin parts; everything else keeps its exact shape.
+    const grown = dilate(thin, s.minFeature * res * 0.45);
+    thickened = andNot(grown, solid);
+    solid = or(solid, grown);
+  }
+  // The hanger hole is cut last so nothing can fill it back in.
+  solid = andNot(solid, hole);
+  anchor = andNot(anchor, hole);
+  if (s.fixThin) thin = thinOf(solid);
 
-  return { solid, anchor, ring, base, inner, outer, art, islands, thin, text };
+  return { solid, anchor, ring, base, inner, outer, art, islands, thin, thickened, text };
 }
 
 /**

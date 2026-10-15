@@ -278,3 +278,86 @@ describe('tone clustering', () => {
     expect(cuts[1]).toBeLessThan(240);
   });
 });
+
+describe('quick wins', () => {
+  let wasm;
+  beforeAll(async () => {
+    wasm = await Module();
+    wasm.setup();
+  });
+  const empty = (layout) => new Float32Array(layout.w * layout.h);
+
+  for (const hanger of ['loop', 'hole']) {
+    it(`adds a hanging ${hanger} with a clear hole`, () => {
+      const s = { ...DEFAULTS, resolution: 4, hanger, stand: false };
+      const layout = computeLayout(s);
+      const r = build2D(s, layout, empty(layout), 128);
+      expect(r.stats.pieces).toBe(1);
+      const hg = layout.hanger;
+      const hx = Math.round(layout.mmToPxX(hg.cx));
+      const hy = Math.round(layout.mmToPxY(hg.cy));
+      expect(r.composed.solid.data[hy * layout.w + hx]).toBe(0); // hole is open
+      const ry = Math.round(layout.mmToPxY(hg.cy - hg.holeR - s.hangerWall / 2));
+      expect(r.composed.solid.data[ry * layout.w + hx]).toBe(1); // ring material
+      // loop sits above the frame
+      if (hanger === 'loop') expect(hg.cy - hg.outerR).toBeLessThan(-layout.frameH / 2);
+      const m = build3D(wasm, s, r);
+      expect(m.info.status).toBe('NoError');
+      m.dispose();
+    });
+  }
+
+  it('bevel keeps the part watertight and slightly lighter', () => {
+    const s = { ...DEFAULTS, resolution: 4, stand: false };
+    const layout = computeLayout(s);
+    const r = build2D(s, layout, empty(layout), 128);
+    const a = build3D(wasm, { ...s, bevel: 0 }, r);
+    const b = build3D(wasm, { ...s, bevel: 0.8 }, r);
+    expect(b.info.status).toBe('NoError');
+    expect(b.info.volume).toBeLessThan(a.info.volume);
+    expect(b.info.bbox.max[2]).toBeCloseTo(a.info.bbox.max[2], 3);
+    a.dispose();
+    b.dispose();
+  });
+
+  it('fixThin thickens only thin parts', () => {
+    const s = { ...DEFAULTS, resolution: 6, minFeature: 1.5 };
+    const layout = computeLayout(s);
+    const ink = empty(layout);
+    for (let py = 0; py < layout.h; py++)
+      for (let px = 0; px < layout.w; px++) {
+        const x = layout.pxToMmX(px), y = layout.pxToMmY(py);
+        if (Math.abs(x) < 0.4 && Math.abs(y) < 30) ink[py * layout.w + px] = 255; // 0.8 mm line
+        if (Math.abs(x - 20) < 6 && Math.abs(y) < 10) ink[py * layout.w + px] = 255; // chunky block
+      }
+    const before = build2D({ ...s, blur: 0 }, layout, ink, 128);
+    const after = build2D({ ...s, blur: 0, fixThin: true }, layout, ink, 128);
+    expect(before.stats.thinArea).toBeGreaterThan(20);
+    expect(after.stats.thinArea).toBeLessThan(before.stats.thinArea / 4);
+    expect(after.stats.thickenedArea).toBeGreaterThan(0);
+    // the block's edge did not move
+    const bx = Math.round(layout.mmToPxX(26.5)), by = Math.round(layout.mmToPxY(0));
+    expect(after.composed.solid.data[by * layout.w + bx]).toBe(0);
+  });
+
+  it('cuts a magnet pocket into a deep foot', () => {
+    const s = { ...DEFAULTS, resolution: 4, footDepth: 20, stand: false };
+    const layout = computeLayout(s);
+    const r = build2D(s, layout, empty(layout), 128);
+    const a = build3D(wasm, s, r);
+    const b = build3D(wasm, { ...s, pocketDiameter: 10, pocketDepth: 3 }, r);
+    expect(b.info.status).toBe('NoError');
+    expect(a.info.volume - b.info.volume).toBeCloseTo(Math.PI * 25 * 3, -1);
+    a.dispose();
+    b.dispose();
+  });
+
+  it('checks printer bed fit', async () => {
+    const { fitsBed } = await import('../src/core/printers.js');
+    expect(fitsBed([200, 100, 4], [256, 256, 256]).fits).toBe(true);
+    expect(fitsBed([240, 100, 4], [250, 210, 220]).fits).toBe(true);
+    const r = fitsBed([300, 300, 4], [256, 256, 256]);
+    expect(r.fits).toBe(false);
+    expect(r.scale).toBeCloseTo(252 / 300, 3);
+  });
+});

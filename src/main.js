@@ -2,7 +2,8 @@ import './style.css';
 import Module from 'manifold-3d';
 import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import { SECTIONS, PRESETS } from './ui/schema.js';
-import { Preview3D } from './ui/preview3d.js';
+import { Preview3D, SCENES, FINISHES } from './ui/preview3d.js';
+import { fitsBed, printerById } from './core/printers.js';
 import { DEFAULTS, build2D, build3D } from './core/pipeline.js';
 import { computeLayout } from './core/compose.js';
 import { toBinarySTL, toSVG } from './core/mesh.js';
@@ -166,6 +167,7 @@ function set(patch, { rerun = true } = {}) {
   }
   saveSettings();
   syncControls();
+  recordHistory();
   if (rerun) schedule();
 }
 
@@ -203,10 +205,20 @@ async function run() {
       renderStatus();
       return;
     }
-    const m = build3D(wasm, s, r);
+    // The bevel is the slowest step: show a quick un-bevelled model first,
+    // then refine once the settings stop changing.
+    const draft = s.bevel > 0.05;
+    const m = build3D(wasm, draft ? { ...s, bevel: 0 } : s, r);
+    m.draft = draft;
     state.result3d = m;
-    preview3d.show(m.previewMesh, m.standMesh, Math.max(s.artThickness, s.frameThickness));
+    preview3d.setOptions({ orientation: s.orientation });
+    preview3d.show(m.previewMesh, m.standMesh);
     renderStatus();
+    if (draft) {
+      await new Promise((res) => setTimeout(res, 450));
+      if (version !== state.version) return;
+      finalizeModel(wasm, s, r);
+    }
   } catch (err) {
     console.error(err);
     $('status').innerHTML = `<span class="badge bad">Error: ${escapeHtml(err.message || String(err))}</span>`;
@@ -214,6 +226,22 @@ async function run() {
     if (version === state.version) $('busy').hidden = true;
     updateButtons();
   }
+}
+
+function finalizeModel(wasm, s, r) {
+  const m = build3D(wasm, s, r);
+  state.result3d?.dispose();
+  state.result3d = m;
+  preview3d.show(m.previewMesh, m.standMesh);
+  renderStatus();
+  return m;
+}
+
+// Exports always use the full-quality model.
+function finalModel() {
+  const m = state.result3d;
+  if (m?.draft && state.wasm) return finalizeModel(state.wasm, { ...state.s }, state.result2d);
+  return m;
 }
 
 let wasmPromise = null;
@@ -291,7 +319,7 @@ function draw2D() {
     let a = 255;
     if (solid.data[i]) {
       col = anchor.data[i] ? (text && text.data[i] ? C.art : C.frame) : shades[levels[i]];
-      if (showIssues && bridgeMask.data[i] && !anchor.data[i]) col = C.bridge;
+      if (showIssues && ((bridgeMask.data[i] && !anchor.data[i]) || composed.thickened.data[i])) col = C.bridge;
       if (showIssues && thin.data[i]) col = C.thin;
       if (showPhoto) a = 150;
     } else if (showIssues && removed.data[i]) {
@@ -374,6 +402,7 @@ function renderStatus() {
   if (r.stats.removed) badges.push(['warn', `${r.stats.removed} speck${r.stats.removed > 1 ? 's' : ''} dropped`]);
   if (r.stats.layers > 1) badges.push(['', `${r.stats.layers} depth layers`]);
   if (state.strokes.length) badges.push(['', `${state.strokes.length} hand edit${state.strokes.length > 1 ? 's' : ''}`]);
+  if (r.stats.thickenedArea > 0.5) badges.push(['', `${r.stats.thickenedArea.toFixed(0)} mm² thickened`]);
   if (r.stats.thinArea > 0.5)
     badges.push(['warn', `⚠ ${r.stats.thinArea.toFixed(0)} mm² thinner than ${s.minFeature} mm`]);
   if (m) {
@@ -386,12 +415,22 @@ function renderStatus() {
     if (m.info.status === 'NoError') badges.push(['ok', '✓ Watertight']);
     else badges.push(['bad', `Mesh: ${m.info.status}`]);
     if (m.stand) badges.push(['', `Stand ≈ ${((m.info.standVolume / 1000) * 1.24).toFixed(0)} g`]);
+    // Printer bed check, in the orientation the STL is exported in.
+    const [, pname, bed] = printerById(s.printer);
+    const parts = [s.orientation === 'upright' ? [size[0], size[2], size[1]] : size];
+    const sb = m.info.standBox;
+    if (sb) parts.push([sb.max[0] - sb.min[0], sb.max[2] - sb.min[2], sb.max[1] - sb.min[1]]);
+    const worst = parts.map((p) => fitsBed(p, bed)).reduce((a, b) => (b.scale < a.scale ? b : a));
+    const short = pname.split(' / ')[0];
+    if (worst.fits) badges.push(['ok', `✓ Fits ${short}`]);
+    else badges.push(['bad', `⚠ Too big for ${short}: scale to ${Math.floor(worst.scale * 100)}%`]);
   }
   $('status').innerHTML = badges.map(([cls, t]) => `<span class="badge ${cls}">${escapeHtml(t)}</span>`).join('');
 }
 
 function updateButtons() {
   const has = !!state.result3d;
+  $('save-project').disabled = !state.source;
   $('dl-stl').disabled = !has;
   $('dl-svg').disabled = !(state.result2d && state.result2d.solidPolys.length);
   const stand = $('dl-stand');
@@ -413,12 +452,15 @@ async function useSource(canvas, name) {
   if (state.s.mode !== 'alpha') state.s.threshold = Math.round(autoThreshold(canvas, state.s));
   saveSettings();
   syncControls();
+  resetHistory();
   preview3d.fitted = false;
   schedule(0);
 }
 
 async function openFile(file) {
-  if (!file || !file.type.startsWith('image/')) return;
+  if (!file) return;
+  if (/\.json$/i.test(file.name) || file.type === 'application/json') return openProject(file);
+  if (!file.type.startsWith('image/')) return;
   try {
     const c = await loadImageFile(file);
     useSource(c, file.name);
@@ -575,6 +617,7 @@ const endPointer = (e) => {
     if (e.type === 'pointerup') {
       state.strokes.push({ mode, r, points });
       updateTools();
+      recordHistory(true);
       schedule(0);
     } else draw2D();
     return;
@@ -617,15 +660,67 @@ function updateTools() {
   }
   canvas2d.dataset.tool = state.tool;
   $('brush-size').closest('.brush').hidden = state.tool === 'move';
-  $('undo-edit').disabled = !state.strokes.length;
+  $('undo-edit').disabled = !(history.index > 0 || history.timer);
+  $('redo-edit').disabled = history.index >= history.stack.length - 1;
   $('clear-edits').disabled = !state.strokes.length;
 }
 
-function undoEdit() {
-  if (!state.strokes.length) return;
-  state.strokes.pop();
+// ---------------------------------------------------------------------------
+// Undo / redo over settings and hand edits
+// ---------------------------------------------------------------------------
+const history = { stack: [], index: -1, timer: 0 };
+
+function snapshot() {
+  return JSON.stringify({ s: state.s, strokes: state.strokes });
+}
+
+function commitHistory() {
+  clearTimeout(history.timer);
+  history.timer = 0;
+  const snap = snapshot();
+  if (history.stack[history.index] === snap) return updateTools();
+  history.stack = history.stack.slice(0, history.index + 1);
+  history.stack.push(snap);
+  if (history.stack.length > 150) history.stack.shift();
+  history.index = history.stack.length - 1;
+  updateTools();
+}
+
+// Slider drags produce many changes: group them into one undo step.
+function recordHistory(now = false) {
+  clearTimeout(history.timer);
+  if (now) return commitHistory();
+  history.timer = setTimeout(commitHistory, 450);
+  updateTools();
+}
+
+function resetHistory() {
+  history.stack = [];
+  history.index = -1;
+  commitHistory();
+}
+
+function restore(snap) {
+  const { s, strokes } = JSON.parse(snap);
+  state.s = { ...DEFAULTS, ...s };
+  state.strokes = strokes;
+  saveSettings();
+  syncControls();
   updateTools();
   schedule(0);
+}
+
+function undoEdit() {
+  if (history.timer) commitHistory();
+  if (history.index <= 0) return;
+  history.index--;
+  restore(history.stack[history.index]);
+}
+
+function redoEdit() {
+  if (history.index >= history.stack.length - 1) return;
+  history.index++;
+  restore(history.stack[history.index]);
 }
 
 for (const b of document.querySelectorAll('[data-tool]')) {
@@ -639,15 +734,19 @@ $('brush-size').addEventListener('input', (e) => {
   $('brush-out').textContent = `${state.brush.toFixed(1)} mm`;
 });
 $('undo-edit').addEventListener('click', undoEdit);
+$('redo-edit').addEventListener('click', redoEdit);
 $('clear-edits').addEventListener('click', () => {
   state.strokes = [];
-  updateTools();
+  recordHistory(true);
   schedule(0);
 });
 document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName) && document.activeElement.type !== 'range';
   if (typing) return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+    e.preventDefault();
+    redoEdit();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     undoEdit();
   } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -663,8 +762,45 @@ document.addEventListener('keydown', (e) => {
 // 3D preview + exports
 // ---------------------------------------------------------------------------
 const preview3d = new Preview3D($('stage3d'));
-$('v-color').addEventListener('input', (e) => preview3d.setColor(e.target.value));
+const VIEW_KEY = 'imgtostl:view:v1';
+const view = (() => {
+  const d = { scene: 'studio', finish: 'matte', color: '#ff7a45', layerLines: true, turntable: false };
+  try {
+    return { ...d, ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') };
+  } catch {
+    return d;
+  }
+})();
+$('v-scene').innerHTML = Object.entries(SCENES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+$('v-finish').innerHTML = Object.entries(FINISHES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+$('v-scene').value = view.scene;
+$('v-finish').value = view.finish;
+$('v-color').value = view.color;
+$('v-layers').checked = view.layerLines;
+$('v-turn').checked = view.turntable;
+
+function setView(patch) {
+  Object.assign(view, patch);
+  try {
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+  } catch {
+    /* storage unavailable */
+  }
+  $('v-color').disabled = !!FINISHES[view.finish]?.color;
+  preview3d.setOptions(patch);
+}
+$('v-scene').addEventListener('change', (e) => setView({ scene: e.target.value }));
+$('v-finish').addEventListener('change', (e) => setView({ finish: e.target.value }));
+$('v-color').addEventListener('input', (e) => setView({ color: e.target.value }));
+$('v-layers').addEventListener('change', (e) => setView({ layerLines: e.target.checked }));
+$('v-turn').addEventListener('change', (e) => setView({ turntable: e.target.checked }));
+setView({ ...view });
 $('fit3d').addEventListener('click', () => preview3d.fit());
+$('snap3d').addEventListener('click', async () => {
+  if (!state.result3d) return;
+  const blob = await preview3d.snapshot(2);
+  deliver([{ name: `${baseName()}-render.png`, data: new Uint8Array(await blob.arrayBuffer()), type: 'image/png' }]);
+});
 
 // Inside a claude.ai artifact, files go through the platform's downloads
 // capability (which does not accept .stl, so STL files are zipped there).
@@ -716,7 +852,7 @@ function baseName() {
 }
 
 function stlFiles({ withStand }) {
-  const m = state.result3d;
+  const m = finalModel();
   const files = [{ name: `${baseName()}.stl`, data: toBinarySTL(m.exportPiece(), baseName()), type: 'model/stl' }];
   const stand = withStand && m.exportStand();
   if (stand) files.push({ name: `${baseName()}-stand.stl`, data: toBinarySTL(stand, 'stand'), type: 'model/stl' });
@@ -730,6 +866,51 @@ $('dl-stand').addEventListener('click', () => {
   if (!state.result3d?.stand) return;
   deliver(stlFiles({ withStand: true }).slice(1));
 });
+// ---------------------------------------------------------------------------
+// Projects: the image, all settings and hand edits in one JSON file
+// ---------------------------------------------------------------------------
+$('save-project').addEventListener('click', () => {
+  if (!state.source) return;
+  const project = {
+    app: 'imgtostl',
+    version: 1,
+    name: state.sourceName,
+    settings: state.s,
+    strokes: state.strokes,
+    image: state.source.toDataURL('image/png'),
+  };
+  deliver([{ name: `${baseName()}.imgtostl.json`, data: JSON.stringify(project), type: 'application/json' }]);
+});
+
+async function openProject(file) {
+  try {
+    const p = JSON.parse(await file.text());
+    if (p.app !== 'imgtostl' || !p.image) throw new Error('This is not an Imgtostl project file.');
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = () => rej(new Error('The project image could not be read.'));
+      i.src = p.image;
+    });
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    state.source = c;
+    state.sourceName = p.name || 'project';
+    state.s = { ...DEFAULTS, ...p.settings };
+    state.strokes = Array.isArray(p.strokes) ? p.strokes : [];
+    saveSettings();
+    syncControls();
+    resetHistory();
+    preview3d.fitted = false;
+    flash(`Opened ${state.sourceName}`, 'ok');
+    schedule(0);
+  } catch (err) {
+    flash(err.message || 'Could not open that project.', 'bad');
+  }
+}
+
 $('dl-svg').addEventListener('click', () => {
   if (!state.result2d) return;
   const r = state.result2d;

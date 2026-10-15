@@ -45,6 +45,24 @@ Everything runs locally in the browser. Your images are never uploaded.
 - An optional **deep foot** (centred or front-only) makes the piece stand on its own.
 - Or generate a **separate slot stand**: a desk block with a friction-fit slot sized to the slab thickness plus a clearance you set. The piece and the stand both print flat with no supports.
 
+**Hanging and finishing**
+- Add a hanging loop above the frame (for ornaments and keychains) or a reinforced hole through the frame top.
+- A bevelled front edge: a small chamfer built from print-layer-height steps.
+- "Thicken only the too-thin parts" grows just the areas flagged as too thin, so everything else keeps its exact shape.
+- A pocket under a deep foot for a magnet or coins as extra weight.
+- A printer bed check for common printers. It warns you when the piece or the stand won't fit, and tells you the scale that would.
+
+**Presentable 3D preview**
+- Scenes: studio backdrop, wooden table, or on the print bed (lying flat on a textured PEI plate, the way it prints).
+- Filament finishes: matte, silk, glossy resin, metal-fill, wood PLA and marble PLA.
+- Physically based lighting with soft shadows and reflections. Curved walls are shaded smoothly and edges stay crisp.
+- Real FDM layer lines show up when you zoom in, along the axis the part is printed in.
+- Turntable mode, and "Save image" for a high-resolution PNG.
+
+**Projects and history**
+- Undo and redo cover every setting and brush stroke (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z).
+- "Save project" stores the image, settings and edits in one `.imgtostl.json` file. Open it again with "Open image…" or by dropping it on the page.
+
 **3D / export**
 - Separate thicknesses for the art and the frame, so you can raise the frame for a framed look.
 - The meshes are built with [manifold-3d](https://github.com/elalish/manifold). Its boolean operations guarantee a **watertight, manifold** STL: no overlapping shells and no repair step in the slicer.

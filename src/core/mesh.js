@@ -34,6 +34,27 @@ const keep = (garbage, obj) => {
 };
 
 /**
+ * Extrude a cross-section with a chamfered top (front) edge. The chamfer is
+ * built as a few inset steps, each one print-layer tall, which is exactly how
+ * a printer would reproduce it anyway.
+ */
+export function extrudeBevelled(wasm, garbage, cs, height, bevel = 0) {
+  const b = Math.min(bevel, height * 0.5);
+  if (b < 0.05) return keep(garbage, cs.extrude(height));
+  const steps = Math.max(1, Math.min(3, Math.round(b / 0.3)));
+  const parts = [keep(garbage, cs.extrude(height - b))];
+  for (let i = 1; i <= steps; i++) {
+    // Mitred insets keep the vertex count of the outline (round joins would
+    // multiply it), then a light simplify drops the slivers.
+    const raw = keep(garbage, cs.offset(-(b * i) / steps, 'Miter', 2));
+    const inset = keep(garbage, raw.simplify(0.02));
+    if (inset.isEmpty()) break;
+    parts.push(keep(garbage, inset.extrude(height - b + (b * i) / steps)));
+  }
+  return parts.length === 1 ? parts[0] : keep(garbage, wasm.Manifold.union(parts));
+}
+
+/**
  * Build the printable piece.
  * @param wasm   initialised manifold module
  * @param p      { solidPolys, framePolys, artThickness, frameThickness,
@@ -43,19 +64,20 @@ const keep = (garbage, obj) => {
 export function buildPiece(wasm, p) {
   const { CrossSection, Manifold } = wasm;
   const garbage = [];
+  const bevel = p.bevel || 0;
   const cs = keep(garbage, new CrossSection(p.solidPolys, 'Positive'));
-  let piece = keep(garbage, cs.extrude(p.artThickness));
+  let piece = extrudeBevelled(wasm, garbage, cs, p.artThickness, bevel);
 
   if (p.framePolys && p.framePolys.length && p.frameThickness > p.artThickness + 1e-6) {
     const fcs = keep(garbage, new CrossSection(p.framePolys, 'Positive'));
-    const frame = keep(garbage, fcs.extrude(p.frameThickness));
+    const frame = extrudeBevelled(wasm, garbage, fcs, p.frameThickness, bevel);
     piece = keep(garbage, piece.add(frame));
   }
 
   for (const layer of p.layers || []) {
     if (!layer.polys.length) continue;
     const lcs = keep(garbage, new CrossSection(layer.polys, 'Positive'));
-    piece = keep(garbage, piece.add(keep(garbage, lcs.extrude(layer.height))));
+    piece = keep(garbage, piece.add(extrudeBevelled(wasm, garbage, lcs, layer.height, bevel)));
   }
 
   const slab = Math.max(p.artThickness, p.frameThickness || 0);
@@ -64,6 +86,17 @@ export function buildPiece(wasm, p) {
     const z0 = position === 'center' ? slab / 2 - depth / 2 : 0;
     const foot = keep(garbage, keep(garbage, Manifold.cube([width, height, depth])).translate([-width / 2, 0, z0]));
     piece = keep(garbage, piece.add(foot));
+    // Optional pocket in the underside for a magnet or coins (extra weight).
+    if (p.pocket && p.pocket.diameter > 0) {
+      const d = Math.min(p.pocket.diameter, depth - 2, width - 2);
+      const h = Math.min(p.pocket.depth, height - 1);
+      if (d > 1 && h > 0.4) {
+        const cyl = keep(garbage, Manifold.cylinder(h + 0.01, d / 2, d / 2, 48));
+        const up = keep(garbage, cyl.rotate([-90, 0, 0])); // axis along +Y
+        const placed = keep(garbage, up.translate([0, -0.01, z0 + depth / 2]));
+        piece = keep(garbage, piece.subtract(placed));
+      }
+    }
   }
 
   if (p.text && p.text.depth > 0.05) {

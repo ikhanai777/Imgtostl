@@ -54,6 +54,16 @@ export const DEFAULTS = {
   textSize: 7, // mm cap-to-baseline box height
   textMode: 'engrave', // engrave | emboss | cutout
   textDepth: 0.8, // mm
+  // hanging
+  hanger: 'none', // none | loop | hole
+  hangerHole: 4, // mm
+  hangerWall: 2.5, // mm
+  // finishing
+  bevel: 0.6, // mm chamfer on the front edges
+  fixThin: false,
+  pocketDiameter: 0, // mm, magnet/coin pocket under a deep foot (0 = off)
+  pocketDepth: 3,
+  printer: 'bambu-a1',
   // layered depth
   layers: 1,
   layerStep: 1.2, // mm per extra layer
@@ -125,6 +135,7 @@ export function build2D(s, layout, ink, cut, extras = {}) {
       bridges: composed.islands.bridges.length,
       removed: composed.islands.removedCount,
       thinArea: thinPx / (s.resolution * s.resolution),
+      thickenedArea: countSolid(composed.thickened) / (s.resolution * s.resolution),
       vertices: solidPolys.reduce((n, p) => n + p.length, 0),
       contours: solidPolys.length,
       layers: 1 + layers.filter((l) => l.polys.length).length,
@@ -217,7 +228,9 @@ export function build3D(wasm, s, r) {
     artThickness: s.artThickness,
     frameThickness: s.frameThickness,
     layers: r.layers,
+    bevel: s.bevel,
     foot,
+    pocket: { diameter: s.pocketDiameter, depth: s.pocketDepth },
     text,
   });
   let stand = null;
@@ -241,6 +254,7 @@ export function build3D(wasm, s, r) {
     triangles: m.numTri(),
     bbox: m.boundingBox(),
     standVolume: stand ? stand.manifold.volume() : 0,
+    standBox: stand ? stand.manifold.boundingBox() : null,
   };
   return {
     piece,

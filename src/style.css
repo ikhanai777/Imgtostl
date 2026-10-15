@@ -651,3 +651,28 @@ details.section:not([open]) summary::after {
 details.section[hidden] {
   display: none;
 }
+
+.view-tools .pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.view-tools select {
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  max-width: 150px;
+}
+.view-tools .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.view-tools .toggle input {
+  accent-color: var(--accent);
+}
