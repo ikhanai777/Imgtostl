@@ -3,7 +3,7 @@
 import { blurField, thresholdField } from './filters.js';
 import { cleanArt, composeSolid, strokeMasks } from './compose.js';
 import { traceMask } from './trace.js';
-import { bottomMm, buildPiece, buildStand, extractMesh, freeAll, loopsToPolygons } from './mesh.js';
+import { bottomMm, buildPiece, buildStand, extractMesh, extractParts, freeAll, loopsToPolygons } from './mesh.js';
 import { and, andNot, components, countSolid, removeSmallSolids } from './mask.js';
 
 export const DEFAULTS = {
@@ -45,6 +45,7 @@ export const DEFAULTS = {
   // connectivity
   islandMode: 'bridge', // bridge | remove | keep
   bridgeWidth: 2,
+  bridgeStyle: 'shortest', // shortest | up | down | radial
   minIsland: 1, // mm²
   minFeature: 1.2, // mm
   // text on the foot
@@ -54,6 +55,13 @@ export const DEFAULTS = {
   textSize: 7, // mm cap-to-baseline box height
   textMode: 'engrave', // engrave | emboss | cutout
   textDepth: 0.8, // mm
+  // frame extras
+  doubleRing: false,
+  ringGap: 2.5, // mm
+  // colour
+  colorMode: 'single', // single | parts | height
+  // background removal
+  wandTolerance: 40,
   // hanging
   hanger: 'none', // none | loop | hole
   hangerHole: 4, // mm
@@ -88,13 +96,13 @@ export function build2D(s, layout, ink, cut, extras = {}) {
   const rawArt = thresholdField(field, layout.w, layout.h, cut);
   const art = cleanArt(rawArt, s);
   const strokes = extras.strokes?.length ? strokeMasks(layout, extras.strokes) : {};
-  const composed = composeSolid(layout, s, art, { ...strokes, text: extras.textMask });
+  const composed = composeSolid(layout, s, art, { ...strokes, text: extras.textMask, frameOuter: extras.frameOuter });
 
   const tol = s.tolerance * s.resolution;
   const traceOpts = { smoothing: s.smoothing, tolerance: tol };
   const loops = traceMask(composed.solid, traceOpts);
   const raised = s.frameThickness > s.artThickness + 1e-6;
-  const frameLoops = raised ? traceMask(composed.anchor, traceOpts) : [];
+  const frameLoops = raised || s.colorMode === 'parts' ? traceMask(composed.anchor, traceOpts) : [];
 
   const yBottom = bottomMm(composed.solid, layout);
   const solidPolys = loopsToPolygons(loops, layout, yBottom);
@@ -205,7 +213,8 @@ function depthLayers(s, field, cut, composed) {
 }
 
 export function build3D(wasm, s, r) {
-  const slab = Math.max(s.artThickness, r.framePolys.length ? s.frameThickness : 0);
+  const raised = s.frameThickness > s.artThickness + 1e-6;
+  const slab = Math.max(s.artThickness, raised ? s.frameThickness : 0);
   const foot =
     r.layout.hasBase && s.footDepth > slab
       ? { width: s.baseWidth, height: s.baseHeight, depth: s.footDepth, position: s.footPosition }
@@ -215,7 +224,7 @@ export function build3D(wasm, s, r) {
   // Front face of the foot, where text sits.
   const footFront = foot
     ? (foot.position === 'center' ? slab / 2 - foot.depth / 2 : 0) + foot.depth
-    : r.framePolys.length
+    : raised
       ? s.frameThickness
       : s.artThickness;
   const text =
@@ -224,7 +233,7 @@ export function build3D(wasm, s, r) {
       : null;
   const piece = buildPiece(wasm, {
     solidPolys: r.solidPolys,
-    framePolys: r.framePolys,
+    framePolys: raised ? r.framePolys : [],
     artThickness: s.artThickness,
     frameThickness: s.frameThickness,
     layers: r.layers,
@@ -247,7 +256,16 @@ export function build3D(wasm, s, r) {
     });
   }
   const m = piece.manifold;
+  const parts = s.colorMode === 'parts' ? splitParts(wasm, piece, r, text) : null;
+  // Single-nozzle colour changes: every distinct top height but the highest.
+  const tops = new Set([s.artThickness]);
+  if (raised) tops.add(s.frameThickness);
+  for (const l of r.layers) if (l.polys.length) tops.add(l.height);
+  if (text && text.mode === 'emboss') tops.add(text.z + text.depth);
+  const sortedTops = [...tops].map((v) => Math.round(v * 100) / 100).sort((a, b) => a - b);
+  const colorChanges = s.orientation === 'flat' && !foot ? sortedTops.slice(0, -1) : [];
   const info = {
+    colorChanges,
     volume: m.volume(),
     genus: m.genus(),
     status: m.status(),
@@ -262,9 +280,13 @@ export function build3D(wasm, s, r) {
     info,
     previewMesh: extractMeshRaw(m),
     standMesh: stand ? extractMeshRaw(stand.manifold) : null,
+    parts,
+    partMeshes: parts ? parts.map((p) => ({ ...extractMeshRaw(p.manifold), name: p.name, color: p.color })) : null,
     exportPiece: () => extractMesh(m, s.orientation),
+    exportParts: () => (parts ? extractParts(parts, s.orientation) : null),
     exportStand: () => (stand ? extractMesh(stand.manifold, 'upright') : null),
     dispose: () => {
+      if (parts) freeAll(parts.garbage);
       freeAll(piece.garbage);
       if (stand) freeAll(stand.garbage);
     },
@@ -283,4 +305,50 @@ function extractMeshRaw(m) {
     positions[3 * i + 2] = mesh.vertProperties[np * i + 2];
   }
   return { positions, indices: Uint32Array.from(mesh.triVerts) };
+}
+
+/**
+ * Split the finished piece into colour parts with exact booleans, so parts
+ * neither overlap nor leave gaps: frame + foot, art, and text (raised letters,
+ * or an inlay that fills engraved letters).
+ */
+function splitParts(wasm, piece, r, text) {
+  const { CrossSection } = wasm;
+  const garbage = [];
+  const keep = (o) => (garbage.push(o), o);
+  const P = piece.manifold;
+  // Splitting prisms are grown slightly outward: where a split boundary would
+  // run along the piece's own outer edge it then lies outside the piece
+  // instead of grazing it, which would leave hairline slivers. The colour
+  // seam moves 0.3 mm into the art, which is invisible.
+  const GROW = 0.3;
+  const grown = (polys) => keep(keep(new CrossSection(polys, 'Positive')).offset(GROW, 'Round'));
+  const tall = (polys) => keep(keep(grown(polys).extrude(2000)).translate([0, 0, -1000]));
+  const out = [];
+  let frame = null;
+  if (r.framePolys.length) {
+    const F = tall(r.framePolys);
+    frame = keep(P.intersect(F));
+    out.push({ name: 'Art', color: 1, manifold: keep(P.subtract(F)) });
+  } else {
+    out.push({ name: 'Art', color: 1, manifold: P });
+  }
+  if (text && r.textPolys.length) {
+    const tcs = keep(new CrossSection(r.textPolys, 'Positive'));
+    if (text.mode === 'emboss') {
+      // Raised letters: everything above the foot's face inside the letters.
+      const T = keep(keep(grown(r.textPolys).extrude(text.depth + 1)).translate([0, 0, text.z]));
+      const letters = keep(P.intersect(T));
+      if (frame) frame = keep(frame.subtract(T));
+      out.push({ name: 'Text', color: 3, manifold: letters });
+    } else {
+      // Inlay: exactly the material the engraving removed.
+      const inlay = keep(keep(tcs.extrude(text.depth)).translate([0, 0, text.z - text.depth]));
+      out.push({ name: 'Text', color: 3, manifold: inlay });
+    }
+  }
+  if (frame) out.unshift({ name: 'Frame', color: 2, manifold: frame });
+  const parts = out.filter((p) => !p.manifold.isEmpty());
+  parts.garbage = garbage;
+  return parts;
 }

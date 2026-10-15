@@ -44,9 +44,9 @@ export function extrudeBevelled(wasm, garbage, cs, height, bevel = 0) {
   const steps = Math.max(1, Math.min(3, Math.round(b / 0.3)));
   const parts = [keep(garbage, cs.extrude(height - b))];
   for (let i = 1; i <= steps; i++) {
-    // Mitred insets keep the vertex count of the outline (round joins would
-    // multiply it), then a light simplify drops the slivers.
-    const raw = keep(garbage, cs.offset(-(b * i) / steps, 'Miter', 2));
+    // Round joins, then a light simplify to keep the vertex count down.
+    // (Mitred joins are cheaper but leave touching sheets at sharp corners.)
+    const raw = keep(garbage, cs.offset(-(b * i) / steps, 'Round'));
     const inset = keep(garbage, raw.simplify(0.02));
     if (inset.isEmpty()) break;
     parts.push(keep(garbage, inset.extrude(height - b + (b * i) / steps)));
@@ -200,6 +200,35 @@ export function extractMesh(manifold, orientation = 'flat') {
     indices: Uint32Array.from(mesh.triVerts),
     size: [maxX - minX, maxY - minY, maxZ - minZ],
   };
+}
+
+/**
+ * Several parts re-oriented together, sharing one offset so they stay
+ * registered to each other (for multi-colour prints).
+ */
+export function extractParts(parts, orientation = 'flat') {
+  const meshes = parts.map((p) => {
+    const m = orientation === 'upright' ? p.manifold.rotate([90, 0, 0]) : p.manifold;
+    const mesh = m.getMesh();
+    if (m !== p.manifold) m.delete();
+    const np = mesh.numProp;
+    const n = mesh.vertProperties.length / np;
+    const positions = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) positions[3 * i + c] = mesh.vertProperties[np * i + c];
+    return { name: p.name, color: p.color, positions, indices: Uint32Array.from(mesh.triVerts) };
+  });
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const m of meshes) {
+    for (let i = 0; i < m.positions.length; i++) {
+      const c = i % 3;
+      if (m.positions[i] < min[c]) min[c] = m.positions[i];
+      if (m.positions[i] > max[c]) max[c] = m.positions[i];
+    }
+  }
+  const off = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, min[2]];
+  for (const m of meshes) for (let i = 0; i < m.positions.length; i++) m.positions[i] -= off[i % 3];
+  return meshes;
 }
 
 /** Binary STL from indexed triangles. */

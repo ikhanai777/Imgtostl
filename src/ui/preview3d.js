@@ -198,6 +198,8 @@ export class Preview3D {
     this.scene.add(this.rim);
 
     this.pieceMat = makePrintMaterial();
+    // Extra filaments for multi-colour parts (frame, text).
+    this.partMats = { 1: this.pieceMat, 2: makePrintMaterial(), 3: makePrintMaterial() };
     this.standMat = makePrintMaterial();
     this.pieceGroup = new THREE.Group();
     this.standGroup = new THREE.Group();
@@ -206,7 +208,16 @@ export class Preview3D {
     this.scene.add(this.ground);
 
     this.textures = {};
-    this.opts = { scene: 'studio', finish: 'matte', color: '#ff7a45', layerLines: true, turntable: false, orientation: 'flat' };
+    this.opts = {
+      scene: 'studio',
+      finish: 'matte',
+      color: '#ff7a45',
+      color2: '#2f3a4a',
+      color3: '#f3efe6',
+      layerLines: true,
+      turntable: false,
+      orientation: 'flat',
+    };
     this.fitted = false;
     this.meshes = null;
 
@@ -257,6 +268,8 @@ export class Preview3D {
       mat.needsUpdate = true;
     };
     setup(this.pieceMat, color, f);
+    setup(this.partMats[2], this.opts.color2, { ...f, color: undefined });
+    setup(this.partMats[3], this.opts.color3, { ...f, color: undefined });
     // Stands print upright on their base: layers along Y.
     setup(this.standMat, '#3a3d42', { ...FINISHES.matte, layer: f.layer ? 1 : 0 });
     this.standMat.userData.uniforms.uLayerAxis.value.set(0, 1, 0);
@@ -272,7 +285,7 @@ export class Preview3D {
     return creased;
   }
 
-  show(pieceMesh, standMesh) {
+  show(pieceMesh, standMesh, partMeshes = null) {
     for (const grp of [this.pieceGroup, this.standGroup]) {
       for (const c of [...grp.children]) {
         c.geometry?.dispose();
@@ -281,9 +294,12 @@ export class Preview3D {
     }
     this.meshes = pieceMesh ? { piece: pieceMesh, stand: standMesh } : null;
     if (!pieceMesh) return;
-    const piece = new THREE.Mesh(Preview3D.geometry(pieceMesh), this.pieceMat);
-    piece.castShadow = piece.receiveShadow = true;
-    this.pieceGroup.add(piece);
+    const sources = partMeshes?.length ? partMeshes : [{ ...pieceMesh, color: 1 }];
+    for (const src of sources) {
+      const mesh = new THREE.Mesh(Preview3D.geometry(src), this.partMats[src.color] || this.pieceMat);
+      mesh.castShadow = mesh.receiveShadow = true;
+      this.pieceGroup.add(mesh);
+    }
     if (standMesh) {
       const stand = new THREE.Mesh(Preview3D.geometry(standMesh), this.standMat);
       stand.castShadow = stand.receiveShadow = true;

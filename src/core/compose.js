@@ -4,7 +4,9 @@ import { connectIslands } from './bridge.js';
 
 export const TEXT_MARGIN = 1.2; // mm of foot kept around text
 
-export const FRAME_SHAPES = ['circle', 'oval', 'rect', 'arch', 'hexagon', 'octagon', 'none'];
+export const FRAME_SHAPES = ['circle', 'oval', 'rect', 'arch', 'hexagon', 'octagon', 'heart', 'star', 'shield', 'scallop', 'custom', 'none'];
+
+const STAR_RATIO = (1 + Math.cos(Math.PI / 5)) / (2 * Math.sin((2 * Math.PI) / 5)); // height / width
 
 // Outer frame size in mm (width, height) for a given shape.
 export function frameSize(s) {
@@ -15,7 +17,10 @@ export function frameSize(s) {
     case 'hexagon':
       return [W, (W * Math.sqrt(3)) / 2];
     case 'octagon':
+    case 'scallop':
       return [W, W];
+    case 'star':
+      return [W, W * STAR_RATIO];
     default:
       return [W, s.height];
   }
@@ -57,9 +62,73 @@ export function shapeContains(shape, W, H, cornerRadius, x, y) {
       }
       return true;
     }
+    case 'heart': {
+      // Classic implicit heart, point down, mapped onto the W x H box.
+      const [u0, u1, v0, v1] = HEART_BOUNDS;
+      const u = u0 + ((x + hw) / W) * (u1 - u0);
+      const v = v1 - ((y + hh) / H) * (v1 - v0);
+      return heartF(u, v) <= 0;
+    }
+    case 'star': {
+      // Five-pointed star, one point up, the two lower points on the bottom.
+      const R = hw / Math.sin((2 * Math.PI) / 5);
+      const cy = -hh + R; // centre so the top point touches the top edge
+      return inStar(x, y - cy, R, R * 0.45);
+    }
+    case 'shield': {
+      // Flat top, straight sides, then curving in to a point at the bottom.
+      if (Math.abs(x) > hw || y < -hh || y > hh) return false;
+      const shoulder = -hh * 0.05;
+      if (y <= shoulder) return true;
+      const t = (y - shoulder) / (hh - shoulder);
+      return Math.abs(x) <= hw * Math.pow(Math.max(0, 1 - t * t), 0.62);
+    }
+    case 'scallop': {
+      const r = Math.hypot(x, y);
+      const th = Math.atan2(y, x);
+      const n = 18;
+      return r <= hw * (0.9 + 0.1 * Math.abs(Math.cos((n * th) / 2)));
+    }
     default:
       return false;
   }
+}
+
+function heartF(u, v) {
+  const a = u * u + v * v - 1;
+  return a * a * a - u * u * v * v * v;
+}
+
+// Bounding box of the implicit heart, found once by sampling.
+const HEART_BOUNDS = (() => {
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (let v = -1.6; v <= 1.6; v += 0.004) {
+    for (let u = -1.6; u <= 1.6; u += 0.004) {
+      if (heartF(u, v) <= 0) {
+        if (u < u0) u0 = u;
+        if (u > u1) u1 = u;
+        if (v < v0) v0 = v;
+        if (v > v1) v1 = v;
+      }
+    }
+  }
+  return [u0, u1, v0, v1];
+})();
+
+function inStar(x, y, R, r) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rr = i % 2 ? r : R;
+    pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+  }
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i];
+    const [xj, yj] = pts[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 /**
@@ -138,14 +207,38 @@ function rasterize(layout, test) {
   return m;
 }
 
-export function frameMasks(layout, s) {
+export function frameMasks(layout, s, customOuter = null) {
   const { frameW: W, frameH: H, res } = layout;
-  const outer = rasterize(layout, (x, y) => shapeContains(s.frameShape, W, H, s.cornerRadius, x, y));
+  const outer =
+    s.frameShape === 'custom' && customOuter
+      ? customOuter
+      : rasterize(layout, (x, y) =>
+          shapeContains(s.frameShape === 'custom' ? 'rect' : s.frameShape, W, H, s.cornerRadius, x, y),
+        );
   let inner;
   let ring;
   if (layout.hasFrame) {
     inner = erode(outer, layout.frameWidth * res);
     ring = andNot(outer, inner);
+    if (s.doubleRing) {
+      // A second, thinner ring inside the first, joined by small tabs.
+      const gap = Math.max(1, s.ringGap) * res;
+      const fw2 = Math.max(0.8, layout.frameWidth * 0.6) * res;
+      const ringOut = erode(inner, gap);
+      const ringIn = erode(ringOut, fw2);
+      const ring2 = andNot(ringOut, ringIn);
+      const tabs = createMask(layout.w, layout.h);
+      const cx = layout.mmToPxX(0);
+      const cy = layout.mmToPxY(0);
+      const far = (layout.w + layout.h) * 2;
+      for (let k = 0; k < 4; k++) {
+        const a = (k * Math.PI) / 2 + Math.PI / 4;
+        drawCapsule(tabs, cx, cy, cx + Math.cos(a) * far, cy + Math.sin(a) * far, Math.max(1, fw2 * 0.6));
+      }
+      const gapBand = andNot(inner, ringOut);
+      ring = or(or(ring, ring2), and(tabs, gapBand));
+      inner = ringIn;
+    }
   } else {
     inner = outer;
     ring = createMask(layout.w, layout.h);
@@ -187,7 +280,7 @@ export function cleanArt(art, s) {
  * Compose frame + art, then make everything one connected printable piece.
  */
 export function composeSolid(layout, s, artMask, extras = {}) {
-  const { outer, inner, ring, base, boss, hole } = frameMasks(layout, s);
+  const { outer, inner, ring, base, boss, hole } = frameMasks(layout, s, extras.frameOuter);
   let anchor = or(or(ring, base), boss);
   let art = s.breakout ? andNot(artMask, outer) : createMask(layout.w, layout.h);
   art = or(art, and(artMask, inner));
@@ -205,6 +298,8 @@ export function composeSolid(layout, s, artMask, extras = {}) {
 
   const res = s.resolution;
   const islands = connectIslands(raw, anchor, {
+    style: s.bridgeStyle,
+    center: { x: layout.mmToPxX(0), y: layout.mmToPxY(0) },
     mode: s.islandMode,
     bridgeRadius: Math.max(1, (s.bridgeWidth * res) / 2),
     minIslandArea: s.minIsland * res * res,

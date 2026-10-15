@@ -16,15 +16,20 @@ Everything runs locally in the browser. Your images are never uploaded.
 - Clean-up controls: pre-blur, speck removal, pinhole fill, line weight (thicken/thin) and spike shaving. All sizes are in real millimetres.
 
 **Frames**
-- Circle, oval, rectangle (with rounded corners), arch window, hexagon, octagon, or no frame.
+- Circle, oval, rectangle (with rounded corners), arch window, hexagon, octagon, heart, star, shield, scalloped circle, your own outline (upload any silhouette image), or no frame.
+- Double ring: a second, thinner ring inside the frame, joined to it with tabs.
 - The frame thickness is uniform for every shape (it is computed with an exact distance transform).
 - "Break out of the frame" lets the art overlap and extend past the border.
 - Placement: drag the 2D preview to move the art, scroll or pinch to scale. Rotate and mirror are in the sidebar.
 
 **Printability (no break lines)**
-- Floating islands (a moon, stars, birds, a pupil inside an eye) are detected using 4-connectivity, because parts that only touch at a corner don't count as connected. Each island is **auto-bridged** to the frame along the shortest path. You can also remove them, or keep them if you really want to.
+- Floating islands (a moon, stars, birds, a pupil inside an eye) are detected using 4-connectivity, because parts that only touch at a corner don't count as connected. Each island is **auto-bridged** to the frame. Pick the bridge style: shortest path, hang from above (strings), prop from below (stems) or spokes out to the frame. You can also remove them, or keep them if you really want to.
 - A thin-feature check highlights every area thinner than your minimum printable width.
 - Live badges show whether the result is one solid piece, how many bridges were added, the size, the volume, an approximate PLA weight, and whether the mesh is watertight.
+
+**Background removal (photos)**
+- "Remove background" clears the background connected to the image border. The **Wand** tool (W) removes any area you click, with an adjustable tolerance. Afterwards the app reads the subject from its transparency.
+- This is colour-based flood fill, not AI. It works best on plain or evenly coloured backgrounds. Steps can be undone and are saved in projects.
 
 **Hand editing**
 - Use the Move / Add / Erase tools above the 2D preview. Add paints material on and Erase removes art, with an adjustable brush size.
@@ -63,6 +68,11 @@ Everything runs locally in the browser. Your images are never uploaded.
 - Undo and redo cover every setting and brush stroke (Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z).
 - "Save project" stores the image, settings and edits in one `.imgtostl.json` file. Open it again with "Open image…" or by dropping it on the page.
 
+**Two-colour printing**
+- *Multi-colour parts*: frame + foot, art and text become separate parts and export as a 3MF with colours, plus one STL per part. This works with AMS/MMU printers in Bambu Studio, PrusaSlicer and Orca.
+- The parts are split with exact booleans, so they never overlap or leave gaps. Engraved text becomes a colour inlay.
+- *Colour swap by height*: for single-nozzle printers, the app lists the Z heights where you pause and change filament (for example a raised frame or depth layers).
+
 **3D / export**
 - Separate thicknesses for the art and the frame, so you can raise the frame for a framed look.
 - The meshes are built with [manifold-3d](https://github.com/elalish/manifold). Its boolean operations guarantee a **watertight, manifold** STL: no overlapping shells and no repair step in the slicer.
@@ -77,7 +87,8 @@ Everything runs locally in the browser. Your images are never uploaded.
 ```bash
 npm install
 npm run dev      # http://localhost:5173
-npm test         # core pipeline tests (Node + manifold wasm)
+npm test         # core pipeline tests (Node + manifold wasm), incl. a weld check
+                 # that every exported solid is a closed 2-manifold
 npm run build    # static site in dist/ (deployable anywhere)
 npm run build:artifact  # one self-contained HTML file in dist-artifact/
 ```

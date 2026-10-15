@@ -353,3 +353,110 @@ export function renderTextMask(layout, s) {
   for (let i = 0; i < m.data.length; i++) m.data[i] = d[4 * i + 3] > 127 ? 1 : 0;
   return m;
 }
+
+/**
+ * Custom frame: turn an uploaded silhouette into the frame's outer shape.
+ * The image is fitted into the frame box, holes are filled (only the outline
+ * matters) and it is moved down so it rests on the foot.
+ */
+export function renderFrameMask(frameSource, layout) {
+  if (!frameSource) return null;
+  const c = makeCanvas(layout.w, layout.h);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const W = layout.frameW;
+  const H = layout.frameH;
+  const fit = Math.min(W / frameSource.width, H / frameSource.height);
+  const dw = frameSource.width * fit * layout.res;
+  const dh = frameSource.height * fit * layout.res;
+  const cx = (0 - layout.minX) * layout.res;
+  const cy = (0 - layout.minY) * layout.res;
+  ctx.drawImage(frameSource, cx - dw / 2, cy - dh / 2, dw, dh);
+  const d = ctx.getImageData(0, 0, layout.w, layout.h).data;
+  const n = layout.w * layout.h;
+  const detected = detectSettings(frameSource);
+  const field = inkField(d, n, detected.mode, { invert: detected.invert });
+  const cut = detected.mode === 'alpha' ? 128 : detected.threshold;
+  const mask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) mask[i] = field[i] > cut ? 1 : 0;
+  const filled = fillOutline(mask, layout.w, layout.h);
+  // Rest the lowest point on the frame's bottom line (y = H/2).
+  let bottom = -1;
+  for (let y = layout.h - 1; y >= 0 && bottom < 0; y--) {
+    for (let x = 0; x < layout.w; x++) {
+      if (filled[y * layout.w + x]) {
+        bottom = y;
+        break;
+      }
+    }
+  }
+  if (bottom < 0) return null;
+  const target = Math.round(layout.mmToPxY(H / 2));
+  const shift = target - bottom;
+  const out = { w: layout.w, h: layout.h, data: new Uint8Array(n) };
+  for (let y = 0; y < layout.h; y++) {
+    const sy = y - shift;
+    if (sy < 0 || sy >= layout.h) continue;
+    out.data.set(filled.subarray(sy * layout.w, (sy + 1) * layout.w), y * layout.w);
+  }
+  return out;
+}
+
+// Keep the largest blob and fill everything it encloses.
+function fillOutline(mask, w, h) {
+  const lab = new Int32Array(w * h);
+  const stack = [];
+  let best = 0;
+  let bestArea = 0;
+  let id = 0;
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i] || lab[i]) continue;
+    id++;
+    let area = 0;
+    stack.push(i);
+    lab[i] = id;
+    while (stack.length) {
+      const j = stack.pop();
+      area++;
+      const x = j % w;
+      for (const k of [x > 0 ? j - 1 : -1, x < w - 1 ? j + 1 : -1, j - w, j + w]) {
+        if (k >= 0 && k < mask.length && mask[k] && !lab[k]) {
+          lab[k] = id;
+          stack.push(k);
+        }
+      }
+    }
+    if (area > bestArea) {
+      bestArea = area;
+      best = id;
+    }
+  }
+  // Flood the outside from the border; whatever is not outside is inside.
+  const outside = new Uint8Array(w * h);
+  for (let x = 0; x < w; x++) stack.push(x, (h - 1) * w + x);
+  for (let y = 0; y < h; y++) stack.push(y * w, y * w + w - 1);
+  while (stack.length) {
+    const j = stack.pop();
+    if (outside[j] || lab[j] === best) continue;
+    outside[j] = 1;
+    const x = j % w;
+    if (x > 0) stack.push(j - 1);
+    if (x < w - 1) stack.push(j + 1);
+    if (j >= w) stack.push(j - w);
+    if (j + w < w * h) stack.push(j + w);
+  }
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = outside[i] ? 0 : 1;
+  return out;
+}
+
+/** Map a point on the layout canvas back to source-image pixels. */
+export function canvasToSource(source, layout, s, px, py) {
+  const box = layout.artBox;
+  const fit = Math.min(box.w / source.width, box.h / source.height) * s.artScale;
+  let dx = px - (s.offsetX - layout.minX) * layout.res;
+  let dy = py - (s.offsetY - layout.minY) * layout.res;
+  const a = (-s.rotation * Math.PI) / 180;
+  [dx, dy] = [dx * Math.cos(a) - dy * Math.sin(a), dx * Math.sin(a) + dy * Math.cos(a)];
+  const k = fit * layout.res;
+  return { x: (s.flipX ? -dx : dx) / k + source.width / 2, y: dy / k + source.height / 2 };
+}

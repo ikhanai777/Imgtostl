@@ -8,6 +8,8 @@ import { DEFAULTS, build2D, build3D } from './core/pipeline.js';
 import { computeLayout } from './core/compose.js';
 import { toBinarySTL, toSVG } from './core/mesh.js';
 import { makeZip } from './core/zip.js';
+import { make3MF } from './core/threemf.js';
+import { applyWand } from './core/wand.js';
 import {
   SAMPLES,
   autoThreshold,
@@ -15,6 +17,8 @@ import {
   loadImageFile,
   renderPlacedArt,
   renderTextMask,
+  renderFrameMask,
+  canvasToSource,
   rgbToHex,
   sampleCanvas,
 } from './image.js';
@@ -37,6 +41,9 @@ const state = {
   tool: 'move', // move | add | erase
   brush: 3, // mm diameter
   strokes: [], // hand edits, mm coordinates
+  sourceOriginal: null, // image as loaded; state.source has the background removed
+  wandOps: [], // background removal operations, source pixel coordinates
+  frameSource: null, // custom frame outline image
   drawing: null,
 };
 
@@ -105,6 +112,10 @@ function buildControl(c) {
       .join('')}</select>`;
     const input = wrap.querySelector('select');
     input.addEventListener('change', () => set({ [c.key]: input.value }));
+  } else if (c.type === 'actions') {
+    wrap.innerHTML = `<div class="actions-row">${c.buttons
+      .map(([id, label]) => `<button type="button" class="btn small" data-action="${id}">${label}</button>`)
+      .join('')}</div>`;
   } else if (c.type === 'text') {
     wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="text" id="${id}" maxlength="${c.maxLength || 60}" placeholder="${c.placeholder || ''}" spellcheck="false">`;
     const input = wrap.querySelector('input');
@@ -144,6 +155,7 @@ function syncControls() {
   for (const [key, { def, wrap }] of controlEls) {
     wrap.hidden = def.show ? !def.show(s) : false;
     const v = s[key];
+    if (def.type === 'actions') continue;
     if (def.type === 'checkbox') wrap.querySelector('input').checked = !!v;
     else if (def.type === 'select') wrap.querySelector('select').value = v;
     else if (def.type === 'color') wrap.querySelector('input[type=color]').value = v;
@@ -189,7 +201,8 @@ async function run() {
     const { ink, rgba } = renderPlacedArt(state.source, layout, s);
     const cut = s.mode === 'alpha' || !s.autoThreshold ? s.threshold : state.s.threshold;
     const textMask = renderTextMask(layout, s);
-    const r = build2D(s, layout, ink, cut, { strokes: state.strokes, textMask });
+    const frameOuter = s.frameShape === 'custom' ? renderFrameMask(state.frameSource, layout) : null;
+    const r = build2D(s, layout, ink, cut, { strokes: state.strokes, textMask, frameOuter });
     r.rgba = rgba;
     state.result2d = r;
     draw2D();
@@ -212,7 +225,7 @@ async function run() {
     m.draft = draft;
     state.result3d = m;
     preview3d.setOptions({ orientation: s.orientation });
-    preview3d.show(m.previewMesh, m.standMesh);
+    preview3d.show(m.previewMesh, m.standMesh, m.partMeshes);
     renderStatus();
     if (draft) {
       await new Promise((res) => setTimeout(res, 450));
@@ -232,7 +245,7 @@ function finalizeModel(wasm, s, r) {
   const m = build3D(wasm, s, r);
   state.result3d?.dispose();
   state.result3d = m;
-  preview3d.show(m.previewMesh, m.standMesh);
+  preview3d.show(m.previewMesh, m.standMesh, m.partMeshes);
   renderStatus();
   return m;
 }
@@ -401,6 +414,13 @@ function renderStatus() {
   if (r.stats.bridges) badges.push(['', `${r.stats.bridges} bridge${r.stats.bridges > 1 ? 's' : ''} added`]);
   if (r.stats.removed) badges.push(['warn', `${r.stats.removed} speck${r.stats.removed > 1 ? 's' : ''} dropped`]);
   if (r.stats.layers > 1) badges.push(['', `${r.stats.layers} depth layers`]);
+  if (s.frameShape === 'custom' && !state.frameSource) badges.push(['warn', 'Upload an outline image for the custom frame']);
+  if (m?.parts) badges.push(['', `${m.parts.length} colour parts: ${m.parts.map((p) => p.name).join(', ')}`]);
+  if (s.colorMode === 'height' && m) {
+    const z = m.info.colorChanges;
+    if (z.length) badges.push(['ok', `Swap filament at Z ${z.map((v) => v.toFixed(1)).join(', ')} mm`]);
+    else badges.push(['warn', 'One height only: raise the frame or add depth layers to swap colours']);
+  }
   if (state.strokes.length) badges.push(['', `${state.strokes.length} hand edit${state.strokes.length > 1 ? 's' : ''}`]);
   if (r.stats.thickenedArea > 0.5) badges.push(['', `${r.stats.thickenedArea.toFixed(0)} mm² thickened`]);
   if (r.stats.thinArea > 0.5)
@@ -432,6 +452,10 @@ function updateButtons() {
   const has = !!state.result3d;
   $('save-project').disabled = !state.source;
   $('dl-stl').disabled = !has;
+  $('dl-stl').textContent = state.s.colorMode === 'parts' ? 'Download 3MF' : 'Download STL';
+  const parts = state.s.colorMode === 'parts';
+  $('v-color2').closest('label').hidden = !parts;
+  $('v-color3').closest('label').hidden = !(parts && state.result3d?.parts?.some((p) => p.color === 3));
   $('dl-svg').disabled = !(state.result2d && state.result2d.solidPolys.length);
   const stand = $('dl-stand');
   stand.hidden = !(state.result3d && state.result3d.stand);
@@ -441,7 +465,67 @@ function updateButtons() {
 // ---------------------------------------------------------------------------
 // Image input
 // ---------------------------------------------------------------------------
+// Re-derive the working image from the original plus background removal.
+function applySource() {
+  const orig = state.sourceOriginal;
+  if (!orig) return;
+  if (!state.wandOps.length) {
+    state.source = orig;
+    return;
+  }
+  const ctx = orig.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, orig.width, orig.height);
+  img.data.set(applyWand(img.data, orig.width, orig.height, state.wandOps));
+  const c = document.createElement('canvas');
+  c.width = orig.width;
+  c.height = orig.height;
+  c.getContext('2d').putImageData(img, 0, 0);
+  state.source = c;
+}
+
+function addWandOp(op) {
+  state.wandOps.push(op);
+  applySource();
+  // A cut-out is best read from its transparency.
+  if (state.s.mode !== 'alpha') Object.assign(state.s, { mode: 'alpha', invert: false, threshold: 128 });
+  saveSettings();
+  syncControls();
+  recordHistory(true);
+  schedule(0);
+}
+
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-action]');
+  if (!b) return;
+  const action = b.dataset.action;
+  if (action === 'bg-auto' && state.sourceOriginal) addWandOp({ auto: true, tol: state.s.wandTolerance });
+  else if (action === 'bg-reset') {
+    state.wandOps = [];
+    applySource();
+    if (state.s.mode === 'alpha' && state.sourceOriginal) Object.assign(state.s, detectSettings(state.sourceOriginal));
+    saveSettings();
+    syncControls();
+    recordHistory(true);
+    schedule(0);
+  } else if (action === 'frame-upload') $('frame-file').click();
+});
+
+$('frame-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    state.frameSource = await loadImageFile(file);
+    preview3d.fitted = false;
+    schedule(0);
+  } catch (err) {
+    flash(err.message, 'bad');
+  }
+});
+
 async function useSource(canvas, name) {
+  state.sourceOriginal = canvas;
+  state.wandOps = [];
   state.source = canvas;
   state.sourceName = (name || 'silhouette').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_') || 'silhouette';
   const detected = detectSettings(canvas);
@@ -554,6 +638,15 @@ canvas2d.addEventListener('pointerdown', (e) => {
     setPicking(false);
     return;
   }
+  if (state.tool === 'wand') {
+    if (!state.sourceOriginal) return;
+    const { x, y } = canvasPoint(e);
+    const p = canvasToSource(state.sourceOriginal, state.result2d.layout, state.s, x, y);
+    const { width, height } = state.sourceOriginal;
+    if (p.x < 0 || p.y < 0 || p.x >= width || p.y >= height) return flash('Click on the photo to remove that area');
+    addWandOp({ x: Math.round(p.x), y: Math.round(p.y), tol: state.s.wandTolerance });
+    return;
+  }
   canvas2d.setPointerCapture(e.pointerId);
   if (state.tool !== 'move' && pointers.size === 0) {
     state.drawing = { mode: state.tool, r: state.brush / 2, points: [pointToMm(e)], id: e.pointerId };
@@ -659,7 +752,7 @@ function updateTools() {
     b.setAttribute('aria-pressed', on);
   }
   canvas2d.dataset.tool = state.tool;
-  $('brush-size').closest('.brush').hidden = state.tool === 'move';
+  $('brush-size').closest('.brush').hidden = state.tool === 'move' || state.tool === 'wand';
   $('undo-edit').disabled = !(history.index > 0 || history.timer);
   $('redo-edit').disabled = history.index >= history.stack.length - 1;
   $('clear-edits').disabled = !state.strokes.length;
@@ -671,7 +764,7 @@ function updateTools() {
 const history = { stack: [], index: -1, timer: 0 };
 
 function snapshot() {
-  return JSON.stringify({ s: state.s, strokes: state.strokes });
+  return JSON.stringify({ s: state.s, strokes: state.strokes, wandOps: state.wandOps });
 }
 
 function commitHistory() {
@@ -701,7 +794,11 @@ function resetHistory() {
 }
 
 function restore(snap) {
-  const { s, strokes } = JSON.parse(snap);
+  const { s, strokes, wandOps = [] } = JSON.parse(snap);
+  if (JSON.stringify(wandOps) !== JSON.stringify(state.wandOps)) {
+    state.wandOps = wandOps;
+    applySource();
+  }
   state.s = { ...DEFAULTS, ...s };
   state.strokes = strokes;
   saveSettings();
@@ -750,7 +847,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     undoEdit();
   } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-    const k = { v: 'move', b: 'add', e: 'erase' }[e.key.toLowerCase()];
+    const k = { v: 'move', b: 'add', e: 'erase', w: 'wand' }[e.key.toLowerCase()];
     if (k) {
       state.tool = k;
       updateTools();
@@ -764,7 +861,7 @@ document.addEventListener('keydown', (e) => {
 const preview3d = new Preview3D($('stage3d'));
 const VIEW_KEY = 'imgtostl:view:v1';
 const view = (() => {
-  const d = { scene: 'studio', finish: 'matte', color: '#ff7a45', layerLines: true, turntable: false };
+  const d = { scene: 'studio', finish: 'matte', color: '#ff7a45', color2: '#2f3a4a', color3: '#f3efe6', layerLines: true, turntable: false };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') };
   } catch {
@@ -776,6 +873,8 @@ $('v-finish').innerHTML = Object.entries(FINISHES).map(([k, v]) => `<option valu
 $('v-scene').value = view.scene;
 $('v-finish').value = view.finish;
 $('v-color').value = view.color;
+$('v-color2').value = view.color2;
+$('v-color3').value = view.color3;
 $('v-layers').checked = view.layerLines;
 $('v-turn').checked = view.turntable;
 
@@ -792,6 +891,8 @@ function setView(patch) {
 $('v-scene').addEventListener('change', (e) => setView({ scene: e.target.value }));
 $('v-finish').addEventListener('change', (e) => setView({ finish: e.target.value }));
 $('v-color').addEventListener('input', (e) => setView({ color: e.target.value }));
+$('v-color2').addEventListener('input', (e) => setView({ color2: e.target.value }));
+$('v-color3').addEventListener('input', (e) => setView({ color3: e.target.value }));
 $('v-layers').addEventListener('change', (e) => setView({ layerLines: e.target.checked }));
 $('v-turn').addEventListener('change', (e) => setView({ turntable: e.target.checked }));
 setView({ ...view });
@@ -825,7 +926,7 @@ async function deliver(files) {
   // files: [{ name, data, type }]
   const saver = await hostSaver();
   if (saver) {
-    const direct = files.length === 1 && !/\.stl$/i.test(files[0].name);
+    const direct = files.length === 1 && /\.(svg|png|json|txt|zip)$/i.test(files[0].name);
     const name = direct ? files[0].name : `${baseName()}.zip`;
     const data = direct ? files[0].data : makeZip(files.map((f) => ({ name: f.name, data: f.data })));
     try {
@@ -836,6 +937,7 @@ async function deliver(files) {
     }
     return;
   }
+  if (files.length > 1) files = [{ name: `${baseName()}.zip`, data: makeZip(files), type: 'application/zip' }];
   for (const f of files) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([f.data], { type: f.type }));
@@ -859,8 +961,22 @@ function stlFiles({ withStand }) {
   return files;
 }
 
+function colorOf(c) {
+  return { 1: view.color, 2: view.color2, 3: view.color3 }[c] || view.color;
+}
+
 $('dl-stl').addEventListener('click', () => {
-  if (state.result3d) deliver(stlFiles({ withStand: false }));
+  if (!state.result3d) return;
+  if (state.s.colorMode !== 'parts') return deliver(stlFiles({ withStand: false }));
+  // Multi-colour: a 3MF with coloured parts, plus one STL per part.
+  const m = finalModel();
+  const parts = m.exportParts();
+  if (!parts) return deliver(stlFiles({ withStand: false }));
+  const files = [
+    { name: `${baseName()}.3mf`, data: make3MF(parts.map((p) => ({ ...p, color: colorOf(p.color) })), baseName()), type: 'model/3mf' },
+    ...parts.map((p) => ({ name: `${baseName()}-${p.name.toLowerCase()}.stl`, data: toBinarySTL(p, p.name), type: 'model/stl' })),
+  ];
+  deliver(files);
 });
 $('dl-stand').addEventListener('click', () => {
   if (!state.result3d?.stand) return;
@@ -877,7 +993,9 @@ $('save-project').addEventListener('click', () => {
     name: state.sourceName,
     settings: state.s,
     strokes: state.strokes,
-    image: state.source.toDataURL('image/png'),
+    wandOps: state.wandOps,
+    image: state.sourceOriginal.toDataURL('image/png'),
+    frameImage: state.frameSource ? state.frameSource.toDataURL('image/png') : null,
   };
   deliver([{ name: `${baseName()}.imgtostl.json`, data: JSON.stringify(project), type: 'application/json' }]);
 });
@@ -886,17 +1004,23 @@ async function openProject(file) {
   try {
     const p = JSON.parse(await file.text());
     if (p.app !== 'imgtostl' || !p.image) throw new Error('This is not an Imgtostl project file.');
-    const img = await new Promise((res, rej) => {
-      const i = new Image();
-      i.onload = () => res(i);
-      i.onerror = () => rej(new Error('The project image could not be read.'));
-      i.src = p.image;
-    });
-    const c = document.createElement('canvas');
-    c.width = img.naturalWidth;
-    c.height = img.naturalHeight;
-    c.getContext('2d').drawImage(img, 0, 0);
-    state.source = c;
+    const toCanvas = async (url) => {
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error('The project image could not be read.'));
+        i.src = url;
+      });
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      return c;
+    };
+    state.sourceOriginal = await toCanvas(p.image);
+    state.frameSource = p.frameImage ? await toCanvas(p.frameImage) : null;
+    state.wandOps = Array.isArray(p.wandOps) ? p.wandOps : [];
+    applySource();
     state.sourceName = p.name || 'project';
     state.s = { ...DEFAULTS, ...p.settings };
     state.strokes = Array.isArray(p.strokes) ? p.strokes : [];

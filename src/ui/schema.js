@@ -1,7 +1,7 @@
 import { PRINTERS } from '../core/printers.js';
 
 // Declarative control definitions. `show(s)` hides irrelevant controls.
-const hasHeight = (s) => ['oval', 'rect', 'arch', 'none'].includes(s.frameShape);
+const hasHeight = (s) => ['oval', 'rect', 'arch', 'heart', 'shield', 'custom', 'none'].includes(s.frameShape);
 const hasBase = (s) => s.baseStyle !== 'none';
 const hasText = (s) => hasBase(s) && !!(s.text && s.text.trim());
 
@@ -23,6 +23,23 @@ export const SECTIONS = [
       },
       { key: 'keyColor', label: 'Background colour', type: 'color', show: (s) => s.mode === 'color', pick: true },
       { key: 'invert', label: 'Invert (swap solid / empty)', type: 'checkbox' },
+      {
+        key: 'wandTolerance',
+        label: 'Background removal tolerance',
+        type: 'range',
+        min: 5,
+        max: 120,
+        step: 1,
+        hint: 'For photos: remove the background automatically, or pick the Wand tool and click areas to remove.',
+      },
+      {
+        type: 'actions',
+        key: 'bgActions',
+        buttons: [
+          ['bg-auto', 'Remove background'],
+          ['bg-reset', 'Restore original'],
+        ],
+      },
       { key: 'autoThreshold', label: 'Auto threshold (Otsu)', type: 'checkbox', show: (s) => s.mode !== 'alpha' },
       {
         key: 'threshold',
@@ -70,12 +87,26 @@ export const SECTIONS = [
           ['arch', 'Arch window'],
           ['hexagon', 'Hexagon'],
           ['octagon', 'Octagon'],
+          ['heart', 'Heart'],
+          ['star', 'Star'],
+          ['shield', 'Shield'],
+          ['scallop', 'Scalloped circle'],
+          ['custom', 'Your own outline (upload)'],
           ['none', 'No frame (art only)'],
         ],
+      },
+      {
+        type: 'actions',
+        key: 'frameActions',
+        buttons: [['frame-upload', 'Upload outline image…']],
+        show: (s) => s.frameShape === 'custom',
+        hint: 'Any silhouette (PNG with transparency, or dark on light). Its outline becomes the frame.',
       },
       { key: 'width', label: 'Width', unit: 'mm', type: 'range', min: 20, max: 300, step: 1 },
       { key: 'height', label: 'Height', unit: 'mm', type: 'range', min: 20, max: 300, step: 1, show: hasHeight },
       { key: 'frameWidth', label: 'Frame thickness', unit: 'mm', type: 'range', min: 1, max: 20, step: 0.5, show: (s) => s.frameShape !== 'none' },
+      { key: 'doubleRing', label: 'Double ring', type: 'checkbox', show: (s) => s.frameShape !== 'none' },
+      { key: 'ringGap', label: 'Ring gap', unit: 'mm', type: 'range', min: 1, max: 10, step: 0.5, show: (s) => s.frameShape !== 'none' && s.doubleRing },
       {
         key: 'hanger',
         label: 'Hanging',
@@ -191,6 +222,18 @@ export const SECTIONS = [
     open: true,
     controls: [
       {
+        key: 'bridgeStyle',
+        label: 'Bridge style',
+        type: 'select',
+        options: [
+          ['shortest', 'Shortest path'],
+          ['up', 'Hang from above (strings)'],
+          ['down', 'Prop from below (stems)'],
+          ['radial', 'Spokes out to the frame'],
+        ],
+        show: (s) => s.islandMode !== 'keep',
+      },
+      {
         key: 'islandMode',
         label: 'Floating parts',
         type: 'select',
@@ -211,6 +254,17 @@ export const SECTIONS = [
     title: '3D model & export',
     open: true,
     controls: [
+      {
+        key: 'colorMode',
+        label: 'Colours',
+        type: 'select',
+        options: [
+          ['single', 'One colour'],
+          ['parts', 'Multi-colour parts (AMS / MMU, 3MF)'],
+          ['height', 'Colour swap by height (single nozzle)'],
+        ],
+        hint: 'Parts: frame, art and text become separate coloured parts. Height: lists the layers where you swap filament.',
+      },
       { key: 'artThickness', label: 'Art thickness', unit: 'mm', type: 'range', min: 0.6, max: 20, step: 0.1 },
       {
         key: 'layers',

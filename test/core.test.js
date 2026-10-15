@@ -361,3 +361,130 @@ describe('quick wins', () => {
     expect(r.scale).toBeCloseTo(252 / 300, 3);
   });
 });
+
+describe('bigger features', () => {
+  let wasm;
+  beforeAll(async () => {
+    wasm = await Module();
+    wasm.setup();
+  });
+  const discScene = (s) => {
+    const layout = computeLayout(s);
+    const ink = new Float32Array(layout.w * layout.h);
+    for (let py = 0; py < layout.h; py++)
+      for (let px = 0; px < layout.w; px++) {
+        const x = layout.pxToMmX(px), y = layout.pxToMmY(py);
+        if ((x - 12) ** 2 + (y + 5) ** 2 < 36) ink[py * layout.w + px] = 255; // floating disc right of centre
+      }
+    return { layout, ink };
+  };
+
+  it('bridge styles point the right way', () => {
+    for (const [style, check] of [
+      ['up', (b) => Math.abs(b.x0 - b.x1) <= 1 && b.y1 < b.y0],
+      ['down', (b) => Math.abs(b.x0 - b.x1) <= 1 && b.y1 > b.y0],
+      ['radial', (b) => b.x1 > b.x0],
+    ]) {
+      const s = { ...DEFAULTS, resolution: 4, bridgeStyle: style };
+      const { layout, ink } = discScene(s);
+      const r = build2D(s, layout, ink, 128);
+      expect(r.stats.bridges, style).toBe(1);
+      expect(check(r.composed.islands.bridges[0]), style).toBe(true);
+      expect(r.stats.pieces).toBe(1);
+    }
+  });
+
+  for (const frameShape of ['heart', 'star', 'shield', 'scallop']) {
+    it(`builds a ${frameShape} frame`, () => {
+      const s = { ...DEFAULTS, resolution: 4, frameShape, height: 100 };
+      const { layout, ink } = discScene(s);
+      const r = build2D(s, layout, ink, 128);
+      expect(r.stats.pieces).toBe(1);
+      const m = build3D(wasm, s, r);
+      expect(m.info.status).toBe('NoError');
+      m.dispose();
+    });
+  }
+
+  it('double ring is tied in with tabs, never floating', () => {
+    const s = { ...DEFAULTS, resolution: 4, doubleRing: true, islandMode: 'keep' };
+    const { layout, ink } = discScene(s);
+    const r = build2D(s, layout, ink, 128);
+    // the disc is kept floating (keep mode), but the second ring must be joined
+    expect(r.stats.pieces).toBe(2);
+    const s2 = { ...s, islandMode: 'bridge' };
+    expect(build2D(s2, layout, ink, 128).stats.pieces).toBe(1);
+  });
+
+  it('uses a custom outer frame mask', () => {
+    const s = { ...DEFAULTS, resolution: 4, frameShape: 'custom', height: 100 };
+    const layout = computeLayout(s);
+    const outer = createMask(layout.w, layout.h);
+    // a diamond
+    for (let py = 0; py < layout.h; py++)
+      for (let px = 0; px < layout.w; px++) {
+        const x = layout.pxToMmX(px), y = layout.pxToMmY(py);
+        if (Math.abs(x) + Math.abs(y) <= 50) outer.data[py * layout.w + px] = 1;
+      }
+    const r = build2D(s, layout, new Float32Array(layout.w * layout.h), 128, { frameOuter: outer });
+    expect(r.stats.pieces).toBe(1);
+    const cx = Math.round(layout.mmToPxX(0)), ty = Math.round(layout.mmToPxY(-48));
+    expect(r.composed.solid.data[ty * layout.w + cx]).toBe(1); // diamond tip is frame
+    const cornerX = Math.round(layout.mmToPxX(-45)), cornerY = Math.round(layout.mmToPxY(-45));
+    expect(r.composed.solid.data[cornerY * layout.w + cornerX]).toBe(0); // no rect corner
+  });
+
+  it('splits colour parts exactly (no overlap, no gap)', async () => {
+    const s = { ...DEFAULTS, resolution: 4, colorMode: 'parts', text: 'HI', textMode: 'engrave', stand: false };
+    const { layout, ink } = discScene(s);
+    const textMask = createMask(layout.w, layout.h);
+    const tb = layout.textBox;
+    drawCapsule(textMask, layout.mmToPxX(-5), layout.mmToPxY(tb.cy), layout.mmToPxX(5), layout.mmToPxY(tb.cy), 1.5 * s.resolution);
+    const r = build2D(s, layout, ink, 128, { textMask });
+    const m = build3D(wasm, s, r);
+    const names = m.parts.map((p) => p.name);
+    expect(names).toEqual(['Frame', 'Art', 'Text']);
+    const frame = m.parts[0].manifold, art = m.parts[1].manifold, inlay = m.parts[2].manifold;
+    expect(frame.volume() + art.volume()).toBeCloseTo(m.info.volume, 0);
+    const ov = frame.intersect(art);
+    expect(ov.volume()).toBeLessThan(0.01);
+    ov.delete();
+    const ov2 = inlay.intersect(frame);
+    expect(ov2.volume()).toBeLessThan(0.01);
+    ov2.delete();
+    const exp = m.exportParts();
+    expect(exp.length).toBe(3);
+    const { make3MF } = await import('../src/core/threemf.js');
+    const file = make3MF(exp.map((p) => ({ ...p, color: '#ff0000' })));
+    const txt = new TextDecoder().decode(file);
+    expect(txt).toContain('3D/3dmodel.model');
+    expect(txt).toContain('<components>');
+    m.dispose();
+  });
+
+  it('lists colour-change heights for a single nozzle', () => {
+    const s = { ...DEFAULTS, resolution: 4, artThickness: 3, frameThickness: 4.5, stand: false };
+    const { layout, ink } = discScene(s);
+    const m = build3D(wasm, s, build2D(s, layout, ink, 128));
+    expect(m.info.colorChanges).toEqual([3]);
+    m.dispose();
+  });
+
+  it('magic wand removes a plain background and keeps the subject', async () => {
+    const { applyWand } = await import('../src/core/wand.js');
+    const w = 40, h = 40;
+    const d = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      const x = i % w, y = (i / w) | 0;
+      const subject = (x - 20) ** 2 + (y - 20) ** 2 < 64;
+      const noise = (i * 7919) % 9;
+      d.set(subject ? [200, 30, 30, 255] : [120 + noise, 180 + noise, 230, 255], i * 4);
+    }
+    const auto = applyWand(d, w, h, [{ auto: true, tol: 30 }]);
+    expect(auto[3]).toBe(0); // corner background gone
+    expect(auto[(20 * w + 20) * 4 + 3]).toBe(255); // subject kept
+    const click = applyWand(d, w, h, [{ x: 20, y: 20, tol: 10 }]);
+    expect(click[(20 * w + 20) * 4 + 3]).toBe(0); // clicked region removed
+    expect(click[3]).toBe(255);
+  });
+});

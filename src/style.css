@@ -676,3 +676,12 @@ details.section[hidden] {
 .view-tools .toggle input {
   accent-color: var(--accent);
 }
+
+.actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#canvas2d[data-tool='wand'] {
+  cursor: cell;
+}
