@@ -13,6 +13,7 @@ import {
   detectSettings,
   loadImageFile,
   renderPlacedArt,
+  renderTextMask,
   rgbToHex,
   sampleCanvas,
 } from './image.js';
@@ -32,6 +33,10 @@ const state = {
   wasm: null,
   picking: false,
   version: 0,
+  tool: 'move', // move | add | erase
+  brush: 3, // mm diameter
+  strokes: [], // hand edits, mm coordinates
+  drawing: null,
 };
 
 function loadSettings() {
@@ -55,6 +60,7 @@ function saveSettings() {
 // Controls
 // ---------------------------------------------------------------------------
 const controlEls = new Map();
+const sectionEls = [];
 
 function fmt(v, step) {
   const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
@@ -79,6 +85,7 @@ function buildControls() {
     }
     for (const c of sec.controls) det.appendChild(buildControl(c));
     form.appendChild(det);
+    sectionEls.push({ sec, det });
   }
   syncControls();
 }
@@ -97,6 +104,10 @@ function buildControl(c) {
       .join('')}</select>`;
     const input = wrap.querySelector('select');
     input.addEventListener('change', () => set({ [c.key]: input.value }));
+  } else if (c.type === 'text') {
+    wrap.innerHTML = `<label for="${id}">${c.label}</label><input type="text" id="${id}" maxlength="${c.maxLength || 60}" placeholder="${c.placeholder || ''}" spellcheck="false">`;
+    const input = wrap.querySelector('input');
+    input.addEventListener('input', () => set({ [c.key]: input.value }));
   } else if (c.type === 'color') {
     wrap.innerHTML = `<div class="row"><label for="${id}">${c.label}</label><span><input type="color" id="${id}"> ${
       c.pick ? '<button type="button" class="btn small ghost" data-pick>Pick from image</button>' : ''
@@ -128,12 +139,17 @@ function buildControl(c) {
 
 function syncControls() {
   const s = state.s;
+  for (const { sec, det } of sectionEls) det.hidden = sec.show ? !sec.show(s) : false;
   for (const [key, { def, wrap }] of controlEls) {
     wrap.hidden = def.show ? !def.show(s) : false;
     const v = s[key];
     if (def.type === 'checkbox') wrap.querySelector('input').checked = !!v;
     else if (def.type === 'select') wrap.querySelector('select').value = v;
     else if (def.type === 'color') wrap.querySelector('input[type=color]').value = v;
+    else if (def.type === 'text') {
+      const input = wrap.querySelector('input');
+      if (document.activeElement !== input) input.value = v || '';
+    }
     else {
       const range = wrap.querySelector('input[type=range]');
       const num = wrap.querySelector('.num');
@@ -170,7 +186,8 @@ async function run() {
     const layout = computeLayout(s);
     const { ink, rgba } = renderPlacedArt(state.source, layout, s);
     const cut = s.mode === 'alpha' || !s.autoThreshold ? s.threshold : state.s.threshold;
-    const r = build2D(s, layout, ink, cut);
+    const textMask = renderTextMask(layout, s);
+    const r = build2D(s, layout, ink, cut, { strokes: state.strokes, textMask });
     r.rgba = rgba;
     state.result2d = r;
     draw2D();
@@ -253,7 +270,17 @@ function draw2D() {
     bridge: cssColor('--bridge'),
     thin: cssColor('--thin'),
     removed: cssColor('--removed'),
+    stage: cssColor('--stage'),
   };
+  // Depth layers: lower layers drawn lighter so the stack reads at a glance.
+  const levels = r.levels;
+  const maxLevel = r.stats.layers - 1;
+  const shade = (k) => {
+    const t = maxLevel > 0 ? 0.6 * (1 - k / maxLevel) : 0;
+    return C.art.map((v, j) => Math.round(v * (1 - t) + C.stage[j] * t));
+  };
+  const shades = Array.from({ length: maxLevel + 1 }, (_, k) => shade(k));
+  const text = composed.text && state.s.textMode !== 'cutout' ? composed.text : null;
   const showPhoto = $('v-photo').checked;
   const showIssues = $('v-issues').checked;
   const src = r.rgba.data;
@@ -263,7 +290,7 @@ function draw2D() {
     let col = null;
     let a = 255;
     if (solid.data[i]) {
-      col = anchor.data[i] ? C.frame : C.art;
+      col = anchor.data[i] ? (text && text.data[i] ? C.art : C.frame) : shades[levels[i]];
       if (showIssues && bridgeMask.data[i] && !anchor.data[i]) col = C.bridge;
       if (showIssues && thin.data[i]) col = C.thin;
       if (showPhoto) a = 150;
@@ -308,7 +335,27 @@ function draw2D() {
     ctx.stroke();
     ctx.restore();
   }
+  if (state.drawing) drawStroke(ctx, state.drawing);
   $('drop-hint').style.display = state.source ? '' : 'flex';
+}
+
+// Live preview of a stroke while it is being painted.
+function drawStroke(ctx, st) {
+  const L = state.result2d.layout;
+  ctx.save();
+  ctx.lineCap = ctx.lineJoin = 'round';
+  ctx.lineWidth = st.r * 2 * L.res;
+  ctx.strokeStyle = st.mode === 'erase' ? 'rgba(239,68,68,0.55)' : 'rgba(22,163,74,0.6)';
+  ctx.beginPath();
+  st.points.forEach(([x, y], i) => {
+    const px = (x - L.minX) * L.res;
+    const py = (y - L.minY) * L.res;
+    if (i) ctx.lineTo(px, py);
+    else ctx.moveTo(px, py);
+  });
+  if (st.points.length === 1) ctx.lineTo((st.points[0][0] - L.minX) * L.res + 0.01, (st.points[0][1] - L.minY) * L.res);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +372,8 @@ function renderStatus() {
   else if (r.stats.pieces > 1) badges.push(['bad', `⚠ ${r.stats.pieces} separate pieces`]);
   if (r.stats.bridges) badges.push(['', `${r.stats.bridges} bridge${r.stats.bridges > 1 ? 's' : ''} added`]);
   if (r.stats.removed) badges.push(['warn', `${r.stats.removed} speck${r.stats.removed > 1 ? 's' : ''} dropped`]);
+  if (r.stats.layers > 1) badges.push(['', `${r.stats.layers} depth layers`]);
+  if (state.strokes.length) badges.push(['', `${state.strokes.length} hand edit${state.strokes.length > 1 ? 's' : ''}`]);
   if (r.stats.thinArea > 0.5)
     badges.push(['warn', `⚠ ${r.stats.thinArea.toFixed(0)} mm² thinner than ${s.minFeature} mm`]);
   if (m) {
@@ -357,6 +406,8 @@ async function useSource(canvas, name) {
   state.source = canvas;
   state.sourceName = (name || 'silhouette').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_') || 'silhouette';
   const detected = detectSettings(canvas);
+  state.strokes = [];
+  updateTools();
   const patch = { ...detected, artScale: 1, offsetX: 0, offsetY: 0, rotation: 0, flipX: false, autoThreshold: true };
   Object.assign(state.s, patch);
   if (state.s.mode !== 'alpha') state.s.threshold = Math.round(autoThreshold(canvas, state.s));
@@ -462,10 +513,26 @@ canvas2d.addEventListener('pointerdown', (e) => {
     return;
   }
   canvas2d.setPointerCapture(e.pointerId);
+  if (state.tool !== 'move' && pointers.size === 0) {
+    state.drawing = { mode: state.tool, r: state.brush / 2, points: [pointToMm(e)], id: e.pointerId };
+    draw2D();
+    return;
+  }
+  if (state.drawing) {
+    // A second finger turns painting into pinch/pan.
+    state.drawing = null;
+    draw2D();
+  }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   canvas2d.classList.add('dragging');
   gesture = startGesture();
 });
+
+function pointToMm(e) {
+  const { x, y } = canvasPoint(e);
+  const L = state.result2d.layout;
+  return [round(L.minX + x / L.res, 0.01), round(L.minY + y / L.res, 0.01)];
+}
 
 function startGesture() {
   const pts = [...pointers.values()];
@@ -475,6 +542,15 @@ function startGesture() {
 }
 
 canvas2d.addEventListener('pointermove', (e) => {
+  if (state.drawing && state.drawing.id === e.pointerId) {
+    const p = pointToMm(e);
+    const last = state.drawing.points[state.drawing.points.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) > state.drawing.r * 0.4) {
+      state.drawing.points.push(p);
+      drawStroke(canvas2d.getContext('2d'), state.drawing);
+    }
+    return;
+  }
   if (!pointers.has(e.pointerId) || !gesture) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   const pts = [...pointers.values()];
@@ -493,6 +569,16 @@ canvas2d.addEventListener('pointermove', (e) => {
 });
 
 const endPointer = (e) => {
+  if (state.drawing && state.drawing.id === e.pointerId) {
+    const { mode, r, points } = state.drawing;
+    state.drawing = null;
+    if (e.type === 'pointerup') {
+      state.strokes.push({ mode, r, points });
+      updateTools();
+      schedule(0);
+    } else draw2D();
+    return;
+  }
   pointers.delete(e.pointerId);
   canvas2d.classList.remove('dragging');
   gesture = pointers.size ? startGesture() : null;
@@ -519,6 +605,59 @@ function clamp(v, a, b) {
 }
 
 for (const id of ['v-photo', 'v-outline', 'v-issues']) $(id).addEventListener('change', draw2D);
+
+// ---------------------------------------------------------------------------
+// Brush tools
+// ---------------------------------------------------------------------------
+function updateTools() {
+  for (const b of document.querySelectorAll('[data-tool]')) {
+    const on = b.dataset.tool === state.tool;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+  }
+  canvas2d.dataset.tool = state.tool;
+  $('brush-size').closest('.brush').hidden = state.tool === 'move';
+  $('undo-edit').disabled = !state.strokes.length;
+  $('clear-edits').disabled = !state.strokes.length;
+}
+
+function undoEdit() {
+  if (!state.strokes.length) return;
+  state.strokes.pop();
+  updateTools();
+  schedule(0);
+}
+
+for (const b of document.querySelectorAll('[data-tool]')) {
+  b.addEventListener('click', () => {
+    state.tool = b.dataset.tool;
+    updateTools();
+  });
+}
+$('brush-size').addEventListener('input', (e) => {
+  state.brush = parseFloat(e.target.value);
+  $('brush-out').textContent = `${state.brush.toFixed(1)} mm`;
+});
+$('undo-edit').addEventListener('click', undoEdit);
+$('clear-edits').addEventListener('click', () => {
+  state.strokes = [];
+  updateTools();
+  schedule(0);
+});
+document.addEventListener('keydown', (e) => {
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName) && document.activeElement.type !== 'range';
+  if (typing) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    undoEdit();
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    const k = { v: 'move', b: 'add', e: 'erase' }[e.key.toLowerCase()];
+    if (k) {
+      state.tool = k;
+      updateTools();
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 3D preview + exports
@@ -593,12 +732,15 @@ $('dl-stand').addEventListener('click', () => {
 });
 $('dl-svg').addEventListener('click', () => {
   if (!state.result2d) return;
-  deliver([{ name: `${baseName()}.svg`, data: toSVG(state.result2d.solidPolys, { title: baseName() }), type: 'image/svg+xml' }]);
+  const r = state.result2d;
+  const svg = toSVG(r.solidPolys, { title: baseName(), layers: r.layers.map((l) => l.polys) });
+  deliver([{ name: `${baseName()}.svg`, data: svg, type: 'image/svg+xml' }]);
 });
 
 window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', draw2D);
 
 // ---------------------------------------------------------------------------
 buildControls();
+updateTools();
 getWasm();
 useSource(sampleCanvas('tree'), 'tree');

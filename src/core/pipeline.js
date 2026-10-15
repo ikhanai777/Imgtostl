@@ -1,10 +1,10 @@
 // Ties the stages together. Everything here is DOM-free so it can be tested
 // in Node and moved to a worker later.
 import { blurField, thresholdField } from './filters.js';
-import { cleanArt, composeSolid } from './compose.js';
+import { cleanArt, composeSolid, strokeMasks } from './compose.js';
 import { traceMask } from './trace.js';
 import { bottomMm, buildPiece, buildStand, extractMesh, freeAll, loopsToPolygons } from './mesh.js';
-import { components, countSolid } from './mask.js';
+import { and, andNot, components, countSolid, removeSmallSolids } from './mask.js';
 
 export const DEFAULTS = {
   // image -> mask
@@ -47,6 +47,16 @@ export const DEFAULTS = {
   bridgeWidth: 2,
   minIsland: 1, // mm²
   minFeature: 1.2, // mm
+  // text on the foot
+  text: '',
+  textFont: 'sans',
+  textBold: true,
+  textSize: 7, // mm cap-to-baseline box height
+  textMode: 'engrave', // engrave | emboss | cutout
+  textDepth: 0.8, // mm
+  // layered depth
+  layers: 1,
+  layerStep: 1.2, // mm per extra layer
   // 3D
   artThickness: 3,
   frameThickness: 4,
@@ -63,20 +73,37 @@ export const DEFAULTS = {
  * @param ink     Float32Array ink field over the layout canvas (0..255)
  * @param cut     threshold to apply
  */
-export function build2D(s, layout, ink, cut) {
+export function build2D(s, layout, ink, cut, extras = {}) {
   const field = blurField(ink, layout.w, layout.h, s.blur * s.resolution);
   const rawArt = thresholdField(field, layout.w, layout.h, cut);
   const art = cleanArt(rawArt, s);
-  const composed = composeSolid(layout, s, art);
+  const strokes = extras.strokes?.length ? strokeMasks(layout, extras.strokes) : {};
+  const composed = composeSolid(layout, s, art, { ...strokes, text: extras.textMask });
 
   const tol = s.tolerance * s.resolution;
-  const loops = traceMask(composed.solid, { smoothing: s.smoothing, tolerance: tol });
+  const traceOpts = { smoothing: s.smoothing, tolerance: tol };
+  const loops = traceMask(composed.solid, traceOpts);
   const raised = s.frameThickness > s.artThickness + 1e-6;
-  const frameLoops = raised ? traceMask(composed.anchor, { smoothing: s.smoothing, tolerance: tol }) : [];
+  const frameLoops = raised ? traceMask(composed.anchor, traceOpts) : [];
 
   const yBottom = bottomMm(composed.solid, layout);
   const solidPolys = loopsToPolygons(loops, layout, yBottom);
   const framePolys = loopsToPolygons(frameLoops, layout, yBottom);
+
+  // Layered depth: darker tones stand taller. Each layer is nested inside the
+  // one below it, so the stack always rests on the base silhouette.
+  const layerMasks = depthLayers(s, field, cut, composed);
+  const layers = layerMasks.map((m, i) => ({
+    height: s.artThickness + (i + 1) * s.layerStep,
+    loops: traceMask(m, traceOpts),
+  }));
+  layers.forEach((l) => (l.polys = loopsToPolygons(l.loops, layout, yBottom)));
+  const levels = new Uint8Array(layout.w * layout.h);
+  for (const m of layerMasks) for (let i = 0; i < levels.length; i++) levels[i] += m.data[i];
+
+  const textLoops =
+    composed.text && s.textMode !== 'cutout' ? traceMask(and(composed.text, composed.solid), traceOpts) : [];
+  const textPolys = loopsToPolygons(textLoops, layout, yBottom);
 
   const pieces = components(composed.solid, 1).count;
   const thinPx = countSolid(composed.thin);
@@ -88,6 +115,9 @@ export function build2D(s, layout, ink, cut) {
     loops,
     solidPolys,
     framePolys,
+    layers,
+    levels,
+    textPolys,
     yBottom,
     stats: {
       pieces,
@@ -97,8 +127,70 @@ export function build2D(s, layout, ink, cut) {
       thinArea: thinPx / (s.resolution * s.resolution),
       vertices: solidPolys.reduce((n, p) => n + p.length, 0),
       contours: solidPolys.length,
+      layers: 1 + layers.filter((l) => l.polys.length).length,
     },
   };
+}
+
+// Split the art into nested tone bands. Tones are clustered (1D k-means on
+// the ink histogram) so flat-coloured artwork splits exactly at its colours.
+export function toneCuts(values, n) {
+  const hist = new Float64Array(256);
+  for (const v of values) hist[Math.max(0, Math.min(255, Math.round(v)))]++;
+  const total = values.length;
+  // Initialise centres at quantiles.
+  const centers = [];
+  let acc = 0;
+  let q = 0;
+  for (let t = 0; t < 256 && centers.length < n; t++) {
+    acc += hist[t];
+    while (centers.length < n && acc >= ((q + 0.5) / n) * total) {
+      centers.push(t);
+      q++;
+    }
+  }
+  for (let iter = 0; iter < 30; iter++) {
+    const sum = new Float64Array(n);
+    const cnt = new Float64Array(n);
+    for (let t = 0; t < 256; t++) {
+      if (!hist[t]) continue;
+      let best = 0;
+      for (let k = 1; k < n; k++) if (Math.abs(t - centers[k]) < Math.abs(t - centers[best])) best = k;
+      sum[best] += t * hist[t];
+      cnt[best] += hist[t];
+    }
+    let moved = false;
+    for (let k = 0; k < n; k++) {
+      if (!cnt[k]) continue;
+      const c = sum[k] / cnt[k];
+      if (Math.abs(c - centers[k]) > 0.01) moved = true;
+      centers[k] = c;
+    }
+    if (!moved) break;
+  }
+  const uniq = [...new Set(centers.map((c) => Math.round(c * 100) / 100))].sort((a, b) => a - b);
+  const cuts = [];
+  for (let k = 1; k < uniq.length; k++) if (uniq[k] - uniq[k - 1] > 8) cuts.push((uniq[k] + uniq[k - 1]) / 2);
+  return cuts;
+}
+
+function depthLayers(s, field, cut, composed) {
+  const n = Math.round(s.layers || 1);
+  if (n < 2) return [];
+  const artOnly = andNot(composed.solid, composed.anchor);
+  const vals = [];
+  const stride = Math.max(1, Math.floor(field.length / 200000));
+  for (let i = 0; i < field.length; i += stride) if (artOnly.data[i] && field[i] > cut) vals.push(field[i]);
+  if (vals.length < 10) return [];
+  const out = [];
+  const minArea = Math.max(4, s.despeckle * s.resolution * s.resolution);
+  for (const c of toneCuts(vals, n)) {
+    let m = thresholdField(field, composed.solid.w, composed.solid.h, c);
+    m = removeSmallSolids(and(m, artOnly), minArea);
+    if (out.length) m = and(m, out[out.length - 1]);
+    out.push(m);
+  }
+  return out;
 }
 
 export function build3D(wasm, s, r) {
@@ -107,12 +199,26 @@ export function build3D(wasm, s, r) {
     r.layout.hasBase && s.footDepth > slab
       ? { width: s.baseWidth, height: s.baseHeight, depth: s.footDepth, position: s.footPosition }
       : null;
+  const baseH = r.layout.baseHeight;
+  if (foot) foot.height = baseH;
+  // Front face of the foot, where text sits.
+  const footFront = foot
+    ? (foot.position === 'center' ? slab / 2 - foot.depth / 2 : 0) + foot.depth
+    : r.framePolys.length
+      ? s.frameThickness
+      : s.artThickness;
+  const text =
+    r.textPolys.length && s.textMode !== 'cutout'
+      ? { polys: r.textPolys, mode: s.textMode, depth: Math.min(s.textDepth, footFront - 0.6), z: footFront }
+      : null;
   const piece = buildPiece(wasm, {
     solidPolys: r.solidPolys,
     framePolys: r.framePolys,
     artThickness: s.artThickness,
     frameThickness: s.frameThickness,
+    layers: r.layers,
     foot,
+    text,
   });
   let stand = null;
   if (s.stand && r.layout.hasBase && !foot) {
@@ -123,7 +229,7 @@ export function build3D(wasm, s, r) {
       wall: 4,
       depth: s.standDepth,
       height: s.standHeight,
-      slotDepth: Math.min(s.slotDepth, s.baseHeight),
+      slotDepth: Math.min(s.slotDepth, r.layout.slotDepthMax),
       chamfer: 2,
     });
   }

@@ -183,3 +183,98 @@ describe('zip', () => {
     expect(dv.getUint16(z.length - 12, true)).toBe(2);
   });
 });
+
+describe('new features', () => {
+  let wasm;
+  beforeAll(async () => {
+    wasm = await Module();
+    wasm.setup();
+  });
+
+  function moonScene(s, shade = false) {
+    const layout = computeLayout(s);
+    const ink = new Float32Array(layout.w * layout.h);
+    for (let py = 0; py < layout.h; py++) {
+      for (let px = 0; px < layout.w; px++) {
+        const x = layout.pxToMmX(px);
+        const y = layout.pxToMmY(py);
+        if ((x - 10) ** 2 + (y + 15) ** 2 < 100) ink[py * layout.w + px] = 255; // floating disc
+        else if (shade && Math.abs(x + 15) < 12 && y > 0) ink[py * layout.w + px] = x < -15 ? 230 : 140; // two tones
+      }
+    }
+    return { layout, ink };
+  }
+
+  it('a painted stroke replaces the auto bridge', () => {
+    const s = { ...DEFAULTS, resolution: 4 };
+    const { layout, ink } = moonScene(s);
+    expect(build2D(s, layout, ink, 128).stats.bridges).toBe(1);
+    const strokes = [{ mode: 'add', r: 1.5, points: [[10, -15], [10, -50]] }];
+    const r = build2D(s, layout, ink, 128, { strokes });
+    expect(r.stats.bridges).toBe(0);
+    expect(r.stats.pieces).toBe(1);
+  });
+
+  it('erasing removes art', () => {
+    const s = { ...DEFAULTS, resolution: 4 };
+    const { layout, ink } = moonScene(s);
+    const strokes = [{ mode: 'erase', r: 12, points: [[10, -15]] }];
+    const r = build2D(s, layout, ink, 128, { strokes });
+    expect(r.stats.bridges).toBe(0);
+    expect(r.stats.islands).toBe(0);
+  });
+
+  it('layered depth stacks darker tones higher', () => {
+    const s = { ...DEFAULTS, resolution: 4, layers: 3, layerStep: 1.5, stand: false };
+    const { layout, ink } = moonScene(s, true);
+    const flat = build2D({ ...s, layers: 1 }, layout, ink, 100);
+    const r = build2D(s, layout, ink, 100);
+    expect(r.stats.layers).toBeGreaterThan(1);
+    const a = build3D(wasm, { ...s, layers: 1 }, flat);
+    const b = build3D(wasm, s, r);
+    expect(b.info.status).toBe('NoError');
+    expect(b.info.volume).toBeGreaterThan(a.info.volume);
+    expect(b.info.bbox.max[2]).toBeCloseTo(s.artThickness + (r.stats.layers - 1) * 1.5, 1);
+    expect(r.stats.layers).toBe(3);
+    expect(toSVG(r.solidPolys, { layers: r.layers.map((l) => l.polys) })).toContain('layer-2');
+    a.dispose();
+    b.dispose();
+  });
+
+  for (const textMode of ['engrave', 'emboss', 'cutout']) {
+    it(`text on the foot: ${textMode}`, () => {
+      const s = { ...DEFAULTS, resolution: 4, text: 'HI', textSize: 8, textMode, textDepth: 1 };
+      const { layout, ink } = moonScene(s);
+      expect(layout.baseHeight).toBeGreaterThanOrEqual(8 + 2 + s.slotDepth);
+      // fake glyphs: two bars inside the text box
+      const textMask = createMask(layout.w, layout.h);
+      const tb = layout.textBox;
+      for (const cx of [-5, 5]) {
+        drawCapsule(textMask, layout.mmToPxX(cx), layout.mmToPxY(tb.cy - 3), layout.mmToPxX(cx), layout.mmToPxY(tb.cy + 3), 1.2 * s.resolution);
+      }
+      const r = build2D(s, layout, ink, 128, { textMask });
+      expect(r.stats.pieces).toBe(1);
+      const plain = build3D(wasm, { ...s, text: '' }, build2D({ ...s, text: '' }, layout, ink, 128));
+      const m = build3D(wasm, s, r);
+      expect(m.info.status).toBe('NoError');
+      if (textMode === 'emboss') expect(m.info.volume).toBeGreaterThan(plain.info.volume);
+      else expect(m.info.volume).toBeLessThan(plain.info.volume);
+      if (textMode === 'emboss') expect(m.info.bbox.max[2]).toBeCloseTo(s.frameThickness + 1, 1);
+      m.dispose();
+      plain.dispose();
+    });
+  }
+});
+
+describe('tone clustering', () => {
+  it('cuts between flat tones', async () => {
+    const { toneCuts } = await import('../src/core/pipeline.js');
+    const vals = [...Array(300).fill(100), ...Array(400).fill(160), ...Array(300).fill(240), 101, 238, 159];
+    const cuts = toneCuts(vals, 3);
+    expect(cuts.length).toBe(2);
+    expect(cuts[0]).toBeGreaterThan(100);
+    expect(cuts[0]).toBeLessThan(160);
+    expect(cuts[1]).toBeGreaterThan(160);
+    expect(cuts[1]).toBeLessThan(240);
+  });
+});

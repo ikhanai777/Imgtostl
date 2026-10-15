@@ -277,37 +277,79 @@ function drawCat(ctx) {
 }
 
 function drawMountains(ctx) {
+  // Three tones (far range, near range, trees) to show off layered depth.
   const rand = rng(3);
-  // back range
-  ctx.beginPath();
-  ctx.moveTo(0, 1000);
-  let x = 0;
-  ctx.lineTo(0, 620);
-  while (x < 1000) {
-    x += 60 + rand() * 120;
-    ctx.lineTo(x, 380 + rand() * 260);
-  }
-  ctx.lineTo(1000, 1000);
-  ctx.closePath();
-  ctx.fill();
-  // pine trees in front of a river gap
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 820, 1000, 30);
-  ctx.fillStyle = '#111';
-  for (let i = 0; i < 9; i++) {
-    const tx = 60 + i * 110 + rand() * 30;
-    const th = 140 + rand() * 120;
+  const range = (base, spread, step, color) => {
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(tx, 820 - th);
-    ctx.lineTo(tx + th * 0.28, 845);
-    ctx.lineTo(tx - th * 0.28, 845);
+    ctx.moveTo(0, 1000);
+    let x = 0;
+    ctx.lineTo(0, base + rand() * spread);
+    while (x < 1000) {
+      x += step + rand() * step;
+      ctx.lineTo(x, base + rand() * spread);
+    }
+    ctx.lineTo(1000, 1000);
+    ctx.closePath();
+    ctx.fill();
+  };
+  // sun behind the far range
+  ctx.fillStyle = '#a8a8a8';
+  ctx.beginPath();
+  ctx.arc(720, 330, 90, 0, Math.PI * 2);
+  ctx.fill();
+  range(330, 260, 70, '#9a9a9a');
+  range(560, 180, 90, '#5c5c5c');
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 880, 1000, 120);
+  for (let i = 0; i < 11; i++) {
+    const tx = 30 + i * 92 + rand() * 30;
+    const th = 150 + rand() * 150;
+    ctx.beginPath();
+    ctx.moveTo(tx, 890 - th);
+    ctx.lineTo(tx + th * 0.27, 900);
+    ctx.lineTo(tx - th * 0.27, 900);
     ctx.closePath();
     ctx.fill();
   }
-  // sun
-  ctx.beginPath();
-  ctx.arc(760, 200, 70, 0, Math.PI * 2);
-  ctx.fill();
-  bird(ctx, 400, 220, 26);
-  bird(ctx, 470, 260, 18);
+  bird(ctx, 330, 200, 26);
+  bird(ctx, 410, 240, 18);
+}
+
+export const TEXT_FONTS = {
+  sans: '"Arial Black", "Helvetica Neue", Arial, sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  rounded: '"Arial Rounded MT Bold", "Varela Round", "Trebuchet MS", sans-serif',
+  script: '"Brush Script MT", "Segoe Script", "Lucida Handwriting", cursive',
+  mono: '"Courier New", Courier, monospace',
+};
+
+/**
+ * Rasterise the foot text into a mask the size of the layout canvas,
+ * scaled to fit the text box (height = textSize, width = foot width).
+ */
+export function renderTextMask(layout, s) {
+  if (!layout.hasText) return null;
+  const text = s.text.trim();
+  const font = (px) => `${s.textBold ? 'bold ' : ''}${px}px ${TEXT_FONTS[s.textFont] || TEXT_FONTS.sans}`;
+  const probe = makeCanvas(8, 8).getContext('2d');
+  probe.font = font(100);
+  const mt = probe.measureText(text);
+  const asc = mt.actualBoundingBoxAscent || 72;
+  const desc = mt.actualBoundingBoxDescent || 0;
+  const left = mt.actualBoundingBoxLeft || 0;
+  const right = mt.actualBoundingBoxRight || mt.width;
+  const tb = layout.textBox;
+  const k = Math.min((tb.h * layout.res) / (asc + desc), (tb.w * layout.res) / (left + right));
+  const c = makeCanvas(layout.w, layout.h);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.font = font(100 * k);
+  ctx.fillStyle = '#000';
+  const cx = (tb.cx - layout.minX) * layout.res;
+  const cy = (tb.cy - layout.minY) * layout.res;
+  ctx.fillText(text, cx - ((right - left) / 2) * k, cy + ((asc - desc) / 2) * k);
+  const d = ctx.getImageData(0, 0, layout.w, layout.h).data;
+  const m = { w: layout.w, h: layout.h, data: new Uint8Array(layout.w * layout.h) };
+  for (let i = 0; i < m.data.length; i++) m.data[i] = d[4 * i + 3] > 127 ? 1 : 0;
+  return m;
 }

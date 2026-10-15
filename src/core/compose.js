@@ -1,6 +1,8 @@
 // Frame layout and composition of the final printable silhouette mask.
-import { andNot, and, createMask, erode, or, open, dilate, removeSmallSolids, fillSmallHoles } from './mask.js';
+import { andNot, and, createMask, drawCapsule, erode, or, open, dilate, removeSmallSolids, fillSmallHoles } from './mask.js';
 import { connectIslands } from './bridge.js';
+
+export const TEXT_MARGIN = 1.2; // mm of foot kept around text
 
 export const FRAME_SHAPES = ['circle', 'oval', 'rect', 'arch', 'hexagon', 'octagon', 'none'];
 
@@ -70,7 +72,15 @@ export function computeLayout(s) {
   const fw = hasFrame ? s.frameWidth : 0;
   const margin = s.breakout ? Math.max(W, H) * 0.25 : 0;
   const hasBase = s.baseStyle !== 'none' && s.baseHeight > 0;
-  const baseBottom = hasBase ? H / 2 + s.baseHeight : H / 2;
+  // Text on the foot needs room: grow the foot to fit it.
+  const hasText = hasBase && !!(s.text && s.text.trim());
+  // With a slot stand the bottom of the foot is hidden in the slot, so the
+  // text sits above that reserve.
+  const standActive = hasBase && s.stand && !(s.footDepth > Math.max(s.artThickness, s.frameThickness));
+  const textBlock = hasText ? s.textSize + 2 * TEXT_MARGIN : 0;
+  const slotReserve = hasText && standActive ? s.slotDepth : 0;
+  const baseHeight = hasBase ? Math.max(s.baseHeight, textBlock + slotReserve) : 0;
+  const baseBottom = hasBase ? H / 2 + baseHeight : H / 2;
   const minX = -Math.max(W / 2 + margin, hasBase ? s.baseWidth / 2 : 0) - 1 / res;
   const maxX = -minX;
   const minY = -H / 2 - margin - 1 / res;
@@ -91,6 +101,11 @@ export function computeLayout(s) {
     frameWidth: fw,
     hasFrame,
     hasBase,
+    hasText,
+    baseHeight,
+    // Text box (mm, y down): centred in the part of the foot below the frame.
+    slotDepthMax: hasText ? Math.max(1, baseHeight - textBlock) : baseHeight,
+    textBox: { cx: 0, cy: H / 2 + (baseHeight - slotReserve) / 2, w: Math.max(1, (s.baseWidth || 0) - 2 * TEXT_MARGIN), h: s.textSize || 0 },
     baseTop: H / 2 - Math.max(fw, 1),
     baseBottom,
     artBox: { cx: 0, cy: 0, w: artW, h: artH },
@@ -153,13 +168,22 @@ export function cleanArt(art, s) {
 /**
  * Compose frame + art, then make everything one connected printable piece.
  */
-export function composeSolid(layout, s, artMask) {
+export function composeSolid(layout, s, artMask, extras = {}) {
   const { outer, inner, ring, base } = frameMasks(layout, s);
-  const anchor = or(ring, base);
+  let anchor = or(ring, base);
   let art = s.breakout ? andNot(artMask, outer) : createMask(layout.w, layout.h);
   art = or(art, and(artMask, inner));
   if (s.breakout) art = or(art, and(artMask, ring)); // overlapping the ring is fine
-  const raw = or(anchor, art);
+  if (extras.erase) art = andNot(art, extras.erase);
+  // Hand-painted material is never clipped: the user put it there on purpose.
+  if (extras.add) art = or(art, extras.add);
+  let text = null;
+  if (extras.text && layout.hasBase) {
+    text = and(extras.text, base);
+    if (s.textMode === 'cutout') anchor = andNot(anchor, text);
+  }
+  let raw = or(anchor, art);
+  if (text && s.textMode === 'cutout') raw = andNot(raw, text);
 
   const res = s.resolution;
   const islands = connectIslands(raw, anchor, {
@@ -174,5 +198,25 @@ export function composeSolid(layout, s, artMask) {
   let thin = createMask(layout.w, layout.h);
   if (s.minFeature > 0) thin = andNot(solid, open(solid, (s.minFeature * res) / 2));
 
-  return { solid, anchor, ring, base, inner, outer, art, islands, thin };
+  return { solid, anchor, ring, base, inner, outer, art, islands, thin, text };
+}
+
+/**
+ * Rasterise brush strokes (mm coordinates, y down, frame centre origin).
+ * strokes: [{ mode: 'add' | 'erase', r: mm, points: [[x, y], ...] }]
+ */
+export function strokeMasks(layout, strokes = []) {
+  const add = createMask(layout.w, layout.h);
+  const erase = createMask(layout.w, layout.h);
+  for (const st of strokes) {
+    const target = st.mode === 'erase' ? erase : add;
+    const r = Math.max(0.5, st.r * layout.res);
+    const pts = st.points.map(([x, y]) => [layout.mmToPxX(x), layout.mmToPxY(y)]);
+    if (pts.length === 1) pts.push(pts[0]);
+    for (let i = 1; i < pts.length; i++) drawCapsule(target, pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1], r);
+    // A later add re-paints over earlier erasing and vice versa.
+    const other = st.mode === 'erase' ? add : erase;
+    for (let i = 0; i < target.data.length; i++) if (target.data[i]) other.data[i] = 0;
+  }
+  return { add, erase };
 }

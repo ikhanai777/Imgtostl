@@ -26,6 +26,20 @@ Everything runs locally in the browser. Your images are never uploaded.
 - A thin-feature check highlights every area thinner than your minimum printable width.
 - Live badges show whether the result is one solid piece, how many bridges were added, the size, the volume, an approximate PLA weight, and whether the mesh is watertight.
 
+**Hand editing**
+- Use the Move / Add / Erase tools above the 2D preview. Add paints material on and Erase removes art, with an adjustable brush size.
+- Painting your own bridge to the frame replaces the automatic one.
+- Undo with Ctrl/Cmd+Z. Keyboard shortcuts: V (move), B (add), E (erase).
+
+**Text on the foot**
+- Add a name, date or caption, engraved, embossed or cut through as a stencil. There are five font styles.
+- The foot grows to fit the text, and when a slot stand is used the text sits above the slot so it stays visible.
+
+**Layered depth (shadow box)**
+- Split the art into 2–4 tone bands. Darker parts stand taller, which gives a layered, shadow-box look.
+- Tones are found by clustering, so flat-coloured art splits exactly at its colours.
+- The SVG export keeps each depth layer as its own group, which is useful for layered laser cutting.
+
 **Standing it up**
 - A flat **foot** under any frame shape gives it a flat bottom.
 - An optional **deep foot** (centred or front-only) makes the piece stand on its own.
@@ -47,6 +61,7 @@ npm install
 npm run dev      # http://localhost:5173
 npm test         # core pipeline tests (Node + manifold wasm)
 npm run build    # static site in dist/ (deployable anywhere)
+npm run build:artifact  # one self-contained HTML file in dist-artifact/
 ```
 
 ## How it works

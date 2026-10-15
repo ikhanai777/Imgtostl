@@ -52,12 +52,30 @@ export function buildPiece(wasm, p) {
     piece = keep(garbage, piece.add(frame));
   }
 
+  for (const layer of p.layers || []) {
+    if (!layer.polys.length) continue;
+    const lcs = keep(garbage, new CrossSection(layer.polys, 'Positive'));
+    piece = keep(garbage, piece.add(keep(garbage, lcs.extrude(layer.height))));
+  }
+
   const slab = Math.max(p.artThickness, p.frameThickness || 0);
   if (p.foot && p.foot.depth > slab + 1e-6) {
     const { width, height, depth, position } = p.foot;
     const z0 = position === 'center' ? slab / 2 - depth / 2 : 0;
     const foot = keep(garbage, keep(garbage, Manifold.cube([width, height, depth])).translate([-width / 2, 0, z0]));
     piece = keep(garbage, piece.add(foot));
+  }
+
+  if (p.text && p.text.depth > 0.05) {
+    const { polys, mode, depth, z } = p.text;
+    const tcs = keep(garbage, new CrossSection(polys, 'Positive'));
+    if (mode === 'emboss') {
+      const t = keep(garbage, keep(garbage, tcs.extrude(depth)).translate([0, 0, z]));
+      piece = keep(garbage, piece.add(t));
+    } else {
+      const t = keep(garbage, keep(garbage, tcs.extrude(depth + 1)).translate([0, 0, z - depth]));
+      piece = keep(garbage, piece.subtract(t));
+    }
   }
   return { manifold: piece, garbage };
 }
@@ -194,7 +212,7 @@ export function toBinarySTL({ positions, indices }, name = 'imgtostl') {
 }
 
 /** SVG (mm units) from mm polygons with y up. */
-export function toSVG(polys, { stroke = false, title = 'silhouette' } = {}) {
+export function toSVG(polys, { stroke = false, title = 'silhouette', layers = [] } = {}) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of polys) {
     for (const [x, y] of p) {
@@ -208,8 +226,13 @@ export function toSVG(polys, { stroke = false, title = 'silhouette' } = {}) {
   const W = maxX - minX;
   const H = maxY - minY;
   const f = (v) => +v.toFixed(3);
-  const d = polys
-    .map((p) => 'M' + p.map(([x, y]) => `${f(x - minX)} ${f(maxY - y)}`).join('L') + 'Z')
+  const pathData = (ps) => ps.map((p) => 'M' + p.map(([x, y]) => `${f(x - minX)} ${f(maxY - y)}`).join('L') + 'Z').join('');
+  const d = pathData(polys);
+  // Extra depth layers as separate groups (handy for layered laser cutting).
+  const shades = ['#444', '#777', '#999'];
+  const extra = layers
+    .filter((ps) => ps.length)
+    .map((ps, i) => `<g id="layer-${i + 2}"><path fill="${shades[i % 3]}" fill-rule="nonzero" d="${pathData(ps)}"/></g>\n`)
     .join('');
   const style = stroke
     ? 'fill="none" stroke="#000" stroke-width="0.1"'
@@ -217,6 +240,6 @@ export function toSVG(polys, { stroke = false, title = 'silhouette' } = {}) {
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
     `<svg xmlns="http://www.w3.org/2000/svg" width="${f(W)}mm" height="${f(H)}mm" viewBox="0 0 ${f(W)} ${f(H)}">\n` +
-    `<title>${title}</title>\n<path ${style} d="${d}"/>\n</svg>\n`
+    `<title>${title}</title>\n<g id="layer-1"><path ${style} d="${d}"/></g>\n${extra}</svg>\n`
   );
 }

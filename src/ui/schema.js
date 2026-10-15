@@ -1,6 +1,7 @@
 // Declarative control definitions. `show(s)` hides irrelevant controls.
 const hasHeight = (s) => ['oval', 'rect', 'arch', 'none'].includes(s.frameShape);
 const hasBase = (s) => s.baseStyle !== 'none';
+const hasText = (s) => hasBase(s) && !!(s.text && s.text.trim());
 
 export const SECTIONS = [
   {
@@ -121,6 +122,43 @@ export const SECTIONS = [
     ],
   },
   {
+    id: 'text',
+    title: 'Text on the foot',
+    open: true,
+    hint: 'A name, date or caption. The foot grows to fit it.',
+    show: hasBase,
+    controls: [
+      { key: 'text', label: 'Text', type: 'text', placeholder: 'e.g. Emma · 2026', maxLength: 40 },
+      {
+        key: 'textMode',
+        label: 'Style',
+        type: 'select',
+        options: [
+          ['engrave', 'Engraved (cut into the front)'],
+          ['emboss', 'Embossed (raised)'],
+          ['cutout', 'Stencil (cut through)'],
+        ],
+        show: hasText,
+      },
+      {
+        key: 'textFont',
+        label: 'Font',
+        type: 'select',
+        options: [
+          ['sans', 'Bold sans'],
+          ['serif', 'Serif'],
+          ['rounded', 'Rounded'],
+          ['script', 'Script'],
+          ['mono', 'Typewriter'],
+        ],
+        show: hasText,
+      },
+      { key: 'textBold', label: 'Bold', type: 'checkbox', show: hasText },
+      { key: 'textSize', label: 'Letter height', unit: 'mm', type: 'range', min: 3, max: 30, step: 0.5, show: hasText },
+      { key: 'textDepth', label: 'Depth', unit: 'mm', type: 'range', min: 0.2, max: 3, step: 0.1, show: (s) => hasText(s) && s.textMode !== 'cutout' },
+    ],
+  },
+  {
     id: 'print',
     title: 'Printability',
     open: true,
@@ -146,6 +184,16 @@ export const SECTIONS = [
     open: true,
     controls: [
       { key: 'artThickness', label: 'Art thickness', unit: 'mm', type: 'range', min: 0.6, max: 20, step: 0.1 },
+      {
+        key: 'layers',
+        label: 'Depth layers',
+        type: 'range',
+        min: 1,
+        max: 4,
+        step: 1,
+        hint: 'Split the art by tone: darker parts stand taller (shadow-box look).',
+      },
+      { key: 'layerStep', label: 'Height per layer', unit: 'mm', type: 'range', min: 0.4, max: 5, step: 0.1, show: (s) => s.layers > 1 },
       { key: 'frameThickness', label: 'Frame + foot thickness', unit: 'mm', type: 'range', min: 0.6, max: 30, step: 0.1, hint: 'Thicker than the art = raised frame' },
       {
         key: 'orientation',
@@ -175,6 +223,10 @@ export const PRESETS = {
   window: {
     label: 'Arch window',
     values: { frameShape: 'arch', width: 90, height: 130, frameWidth: 5, baseStyle: 'foot', baseWidth: 100, baseHeight: 8, footDepth: 35, footPosition: 'center', artThickness: 3, frameThickness: 5, stand: false },
+  },
+  shadowbox: {
+    label: 'Shadow box',
+    values: { frameShape: 'rect', width: 130, height: 100, cornerRadius: 4, frameWidth: 5, baseStyle: 'foot', baseWidth: 130, baseHeight: 6, footDepth: 0, artThickness: 1.6, frameThickness: 6, layers: 3, layerStep: 1.4, stand: true },
   },
   cutout: {
     label: 'Laser / Cricut SVG',

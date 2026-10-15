@@ -47,6 +47,18 @@
               <label><input type="checkbox" id="v-issues" checked /> Issues</label>
             </div>
           </div>
+          <div class="tools" role="toolbar" aria-label="Edit tools">
+            <div class="seg">
+              <button type="button" class="tool" data-tool="move" title="Move and scale the art (V)">Move</button>
+              <button type="button" class="tool" data-tool="add" title="Paint material on, e.g. your own bridge (B)">Add</button>
+              <button type="button" class="tool" data-tool="erase" title="Erase art (E)">Erase</button>
+            </div>
+            <label class="brush"><span>Brush</span><input type="range" id="brush-size" min="0.6" max="15" step="0.2" value="3" /><output id="brush-out">3.0 mm</output></label>
+            <span class="tools-end">
+              <button type="button" class="btn ghost small" id="undo-edit" title="Undo last edit (Ctrl+Z)">Undo</button>
+              <button type="button" class="btn ghost small" id="clear-edits">Clear edits</button>
+            </span>
+          </div>
           <div class="stage" id="stage2d">
             <canvas id="canvas2d"></canvas>
             <div class="drop-hint" id="drop-hint">
