@@ -245,7 +245,7 @@ export class Preview3D {
     this.controls.autoRotate = !!this.opts.turntable;
     this.applyMaterials();
     if (patch.scene && patch.scene !== prev.scene) this.fitted = false;
-    if (this.meshes && (patch.scene !== undefined || patch.orientation !== undefined)) this.layout();
+    if (this.meshes && (patch.scene !== undefined || patch.orientation !== undefined || patch.props !== undefined)) this.layout();
   }
 
   applyMaterials() {
@@ -285,7 +285,12 @@ export class Preview3D {
     return creased;
   }
 
-  show(pieceMesh, standMesh, partMeshes = null) {
+  show(pieceMesh, standMesh, partMeshes = null, standProps = null) {
+    if (this.propGroup) {
+      this.propGroup.parent?.remove(this.propGroup);
+      this.propGroup.traverse((o) => o.geometry?.dispose());
+      this.propGroup = null;
+    }
     for (const grp of [this.pieceGroup, this.standGroup]) {
       for (const c of [...grp.children]) {
         c.geometry?.dispose();
@@ -304,6 +309,7 @@ export class Preview3D {
       const stand = new THREE.Mesh(Preview3D.geometry(standMesh), this.standMat);
       stand.castShadow = stand.receiveShadow = true;
       this.standGroup.add(stand);
+      if (standProps) this.propGroup = buildProps(standProps);
     }
     this.layout();
   }
@@ -313,6 +319,8 @@ export class Preview3D {
     const onBed = this.opts.scene === 'bed';
     const pg = this.pieceGroup;
     const sg = this.standGroup;
+    // Props are placed after the layout so they never affect it.
+    if (this.propGroup) sg.remove(this.propGroup);
     pg.position.set(0, 0, 0);
     sg.position.set(0, 0, 0);
     pg.rotation.set(0, 0, 0);
@@ -353,6 +361,7 @@ export class Preview3D {
     const bounds = box(pg);
     if (sg.children.length) bounds.union(box(sg));
     this.buildGround(bounds);
+    if (this.propGroup && this.opts.props !== false && !onBed) sg.add(this.propGroup);
     if (!this.fitted) this.fit();
   }
 
@@ -439,8 +448,12 @@ export class Preview3D {
     if (bounds.isEmpty()) return;
     const size = bounds.getSize(new THREE.Vector3());
     const c = bounds.getCenter(new THREE.Vector3());
-    const r = Math.max(size.x, size.y, size.z, 40) * 0.5;
-    const dist = (r / Math.sin((this.camera.fov * Math.PI) / 360)) * 1.05;
+    // Fit the bounding sphere, so deep bases (cups, bookends) don't push the
+    // art towards the camera and out of frame. Narrow views fit horizontally.
+    const r = Math.max(size.length() * 0.5, 30);
+    const vHalf = (this.camera.fov * Math.PI) / 360;
+    const hHalf = Math.atan(Math.tan(vHalf) * this.camera.aspect);
+    const dist = (r / Math.sin(Math.min(vHalf, hHalf))) * 0.92;
     const dir = this.opts.scene === 'bed' ? new THREE.Vector3(0.45, 0.85, 0.75) : new THREE.Vector3(0.5, 0.28, 1);
     dir.normalize();
     this.controls.target.copy(c);
@@ -463,4 +476,133 @@ export class Preview3D {
     this.resize();
     return blob;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Display-only props that show what each holder is for.
+// ---------------------------------------------------------------------------
+const PENCIL_COLORS = [0xf2c230, 0x2f6fdf, 0xe2483d, 0x2fa36b, 0x1d1d1f, 0xf08a24, 0x8e5bd6];
+
+function std(color, roughness = 0.6, extra = {}) {
+  return new THREE.MeshStandardMaterial({ color, roughness, ...extra });
+}
+
+function pencil(color, length) {
+  const g = new THREE.Group();
+  const r = 3.6;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r, length, 6), std(color, 0.45));
+  body.position.y = length / 2;
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(r, 12, 6), std(0xe8c99a, 0.8));
+  cone.position.y = length + 6;
+  const lead = new THREE.Mesh(new THREE.ConeGeometry(1.1, 3.6, 12), std(0x2a2a2a, 0.4));
+  lead.position.y = length + 10.3;
+  g.add(body, cone, lead);
+  return g;
+}
+
+function buildProps(props) {
+  const g = new THREE.Group();
+  const rand = rng(42);
+  const shadow = (o) => o.traverse((m) => m.isMesh && ((m.castShadow = true), (m.receiveShadow = true)));
+  const cav = props.cavities || [];
+
+  if (props.type === 'pencil' || props.type === 'organizer') {
+    // Pens in the back compartments; the organizer's last cavity is its front tray.
+    const back = props.type === 'organizer' ? cav.slice(0, -1) : cav;
+    back.forEach((c, k) => {
+      const n = Math.max(2, Math.min(9, Math.floor(((c.x1 - c.x0) * (c.z1 - c.z0)) / 260)));
+      for (let i = 0; i < n; i++) {
+        const p = pencil(PENCIL_COLORS[(i + k * 3) % PENCIL_COLORS.length], 150 + rand() * 30);
+        p.position.set(c.x0 + 5 + rand() * (c.x1 - c.x0 - 10), c.yFloor, c.z0 + 5 + rand() * (c.z1 - c.z0 - 10));
+        p.rotation.set((rand() - 0.5) * 0.25, rand() * Math.PI, (rand() - 0.5) * 0.25);
+        g.add(p);
+      }
+    });
+    if (props.type === 'organizer') {
+      const t = cav[cav.length - 1];
+      const cx = (t.x0 + t.x1) / 2;
+      const cz = (t.z0 + t.z1) / 2;
+      for (let i = 0; i < 3; i++) {
+        const eraser = new THREE.Mesh(new THREE.BoxGeometry(18, 7, 10), std([0xff8fa3, 0x7ec8e3, 0xffffff][i], 0.7));
+        eraser.position.set(cx - 30 + i * 22, t.yFloor + 3.5, cz + (rand() - 0.5) * 6);
+        eraser.rotation.y = (rand() - 0.5) * 0.5;
+        g.add(eraser);
+      }
+      const clip = new THREE.Mesh(new THREE.TorusGeometry(4, 0.6, 6, 24), std(0xc0c4c8, 0.3, { metalness: 0.9 }));
+      clip.scale.set(1, 2.4, 1);
+      clip.rotation.x = Math.PI / 2;
+      clip.position.set(cx + 38, t.yFloor + 0.7, cz);
+      g.add(clip);
+    }
+  } else if (props.type === 'tray') {
+    const t = cav[0];
+    const cx = (t.x0 + t.x1) / 2;
+    const cz = (t.z0 + t.z1) / 2;
+    const gold = std(0xd4a640, 0.35, { metalness: 1 });
+    for (let i = 0; i < 4; i++) {
+      const coin = new THREE.Mesh(new THREE.CylinderGeometry(11, 11, 1.8, 40), gold);
+      coin.position.set(cx - 20 + i * 4, t.yFloor + 0.9 + i * 1.8, cz - 2);
+      g.add(coin);
+    }
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(9, 1.6, 16, 48), std(0xe6e8ea, 0.2, { metalness: 1 }));
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(cx + 18, t.yFloor + 1.6, cz + 2);
+    g.add(ring);
+  } else if (props.type === 'planter') {
+    const c = cav[0];
+    const cx = (c.x0 + c.x1) / 2;
+    const cz = (c.z0 + c.z1) / 2;
+    const soilY = c.yFloor + (c.yTop - c.yFloor) * 0.82;
+    const soil = new THREE.Mesh(new THREE.BoxGeometry(c.x1 - c.x0 - 1, 2, c.z1 - c.z0 - 1), std(0x4a3426, 1));
+    soil.position.set(cx, soilY - 1, cz);
+    g.add(soil);
+    // A succulent rosette: leaves spiralling out by the golden angle.
+    const leafMat = std(0x7fae7a, 0.55);
+    const size = Math.min(c.x1 - c.x0, c.z1 - c.z0) * 0.42;
+    for (let i = 0; i < 26; i++) {
+      const t = i / 26;
+      const leaf = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), leafMat);
+      const len = size * (0.35 + 0.65 * t);
+      leaf.scale.set(len * 0.32, len * 0.14, len * 0.55);
+      const a = i * 2.39996;
+      const rr = len * 0.45;
+      leaf.position.set(cx + Math.cos(a) * rr, soilY + size * 0.35 * (1 - t) + 2, cz + Math.sin(a) * rr);
+      leaf.rotation.set(0, -a + Math.PI / 2, 0);
+      leaf.rotateX(-(0.2 + 0.9 * t));
+      g.add(leaf);
+    }
+  } else if (props.type === 'candle' && props.candle) {
+    const { x, y, z, r } = props.candle;
+    const cup = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.5, r - 0.5, 16, 48, 1, true), std(0xd9dde2, 0.25, { metalness: 1, side: THREE.DoubleSide }));
+    cup.position.set(x, y + 8, z);
+    const wax = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.8, r - 0.8, 13, 48), std(0xf7f3ea, 0.5));
+    wax.position.set(x, y + 6.5, z);
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(3.2, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffc46b }),
+    );
+    flame.scale.set(1, 2.4, 1);
+    flame.position.set(x, y + 21, z);
+    const light = new THREE.PointLight(0xffa14a, 9000, 0, 2);
+    light.position.set(x, y + 21, z);
+    light.castShadow = true;
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.bias = -0.002;
+    g.add(cup, wax, flame, light);
+  } else if (props.type === 'bookend' && props.books) {
+    const b = props.books;
+    const colors = [0x8c2f39, 0x2b4c7e, 0xd9b44a, 0x3c6e47, 0x5a4a78];
+    let z = b.z1;
+    for (let i = 0; i < 5 && z - 18 > b.z0; i++) {
+      const th = 18 + rand() * 18;
+      const h = Math.max(b.h + 20, 150) + rand() * 50;
+      const w = Math.min(150, b.x1 - b.x0 + 40) - rand() * 20;
+      const book = new THREE.Mesh(new THREE.BoxGeometry(w, h, th), std(colors[i % colors.length], 0.7));
+      book.position.set((b.x0 + b.x1) / 2 + (rand() - 0.5) * 8, b.y + h / 2, z - th / 2 - 0.5);
+      g.add(book);
+      z -= th + 0.5;
+    }
+  }
+  shadow(g);
+  return g;
 }

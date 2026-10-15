@@ -89,3 +89,36 @@ for (const [name, cfg] of Object.entries(CONFIGS)) {
     m.dispose();
   });
 }
+
+import { STAND_TYPES, standDefaults } from '../src/core/stands.js';
+
+for (const [type] of STAND_TYPES.filter(([t]) => t !== 'none')) {
+  it(`functional base welds cleanly and fits the art: ${type}`, () => {
+    const base = { ...DEFAULTS, resolution: 4, stand: true, standType: type };
+    const s = { ...base, ...standDefaults(type, base.width, base.width + base.baseHeight), drainHole: true };
+    const layout = computeLayout(s);
+    const r = build2D(s, layout, new Float32Array(layout.w * layout.h), 128);
+    const m = build3D(wasm, s, r);
+    expect(m.stand, type).toBeTruthy();
+    expect(m.stand.manifold.status()).toBe('NoError');
+    expect(m.stand.manifold.genus()).toBeGreaterThanOrEqual(0);
+    expect(badEdges(m.exportStand()), type).toBe(0);
+    // The art's foot must fit the slot without colliding with the base.
+    const clash = m.piece.manifold.intersect(m.stand.manifold);
+    expect(clash.volume(), type).toBeLessThan(0.01);
+    clash.delete();
+    // ...and actually sit in it: the slot floor is right under the piece.
+    const sb = m.stand.manifold.boundingBox();
+    expect(sb.max[1]).toBeGreaterThan(0);
+    if (type !== 'block') {
+      expect(m.standProps.type).toBe(type);
+    }
+    if (type === 'pencil' || type === 'organizer') expect(m.standProps.cavities.length).toBeGreaterThanOrEqual(1);
+    if (type === 'organizer') expect(m.standProps.cavities.length).toBe(4); // 3 compartments + front tray
+    if (type === 'candle') {
+      // The tealight sits behind the art with a clear gap.
+      expect(m.standProps.candle.z + m.standProps.candle.r).toBeLessThan(-s.candleGap + 1);
+    }
+    m.dispose();
+  });
+}

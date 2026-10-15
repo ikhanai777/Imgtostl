@@ -1,8 +1,15 @@
 import { PRINTERS } from '../core/printers.js';
+import { STAND_TYPES } from '../core/stands.js';
 
 // Declarative control definitions. `show(s)` hides irrelevant controls.
 const hasHeight = (s) => ['oval', 'rect', 'arch', 'heart', 'shield', 'custom', 'none'].includes(s.frameShape);
 const hasBase = (s) => s.baseStyle !== 'none';
+const canStand = (s) => hasBase(s) && !(s.footDepth > Math.max(s.artThickness, s.frameThickness));
+// Visible when a stand of one of these types is active (any type if none given).
+const standIs =
+  (...types) =>
+  (s) =>
+    canStand(s) && s.stand && s.standType !== 'none' && (!types.length || types.includes(s.standType));
 const hasText = (s) => hasBase(s) && !!(s.text && s.text.trim());
 
 export const SECTIONS = [
@@ -172,11 +179,40 @@ export const SECTIONS = [
         hint: 'For a magnet or coins as extra weight. 0 = off.',
       },
       { key: 'pocketDepth', label: 'Pocket depth', unit: 'mm', type: 'range', min: 0.5, max: 15, step: 0.5, show: (s) => hasBase(s) && s.footDepth > Math.max(s.artThickness, s.frameThickness) && s.pocketDiameter > 0 },
-      { key: 'stand', label: 'Generate separate slot stand', type: 'checkbox', show: (s) => hasBase(s) && !(s.footDepth > Math.max(s.artThickness, s.frameThickness)) },
-      { key: 'standDepth', label: 'Stand depth', unit: 'mm', type: 'range', min: 10, max: 80, step: 1, show: (s) => hasBase(s) && s.stand },
-      { key: 'standHeight', label: 'Stand height', unit: 'mm', type: 'range', min: 5, max: 40, step: 0.5, show: (s) => hasBase(s) && s.stand },
-      { key: 'slotDepth', label: 'Slot depth', unit: 'mm', type: 'range', min: 2, max: 30, step: 0.5, show: (s) => hasBase(s) && s.stand },
-      { key: 'clearance', label: 'Slot clearance', unit: 'mm', type: 'range', min: 0, max: 1, step: 0.05, show: (s) => hasBase(s) && s.stand },
+      {
+        key: 'standType',
+        label: 'Stand / holder',
+        type: 'select',
+        options: STAND_TYPES.map(([v, l]) => [v, v === 'none' ? 'None (foot only)' : l]),
+        show: canStand,
+        hint: 'A separate base the art slides into. Tall parts sit behind the art so it stays visible.',
+      },
+      { key: 'standDepth', label: 'Stand depth', unit: 'mm', type: 'range', min: 10, max: 80, step: 1, show: standIs('block') },
+      { key: 'standHeight', label: 'Stand height', unit: 'mm', type: 'range', min: 5, max: 40, step: 0.5, show: standIs('block') },
+      { key: 'containerWidth', label: 'Width', unit: 'mm', type: 'range', min: 40, max: 240, step: 1, show: standIs('pencil', 'organizer', 'tray', 'planter', 'bookend') },
+      { key: 'containerDepth', label: 'Cup depth (front to back)', unit: 'mm', type: 'range', min: 25, max: 120, step: 1, show: standIs('pencil', 'organizer', 'planter') },
+      { key: 'containerHeight', label: 'Cup height', unit: 'mm', type: 'range', min: 20, max: 160, step: 1, show: standIs('pencil', 'organizer', 'planter') },
+      { key: 'compartments', label: 'Compartments', type: 'range', min: 1, max: 6, step: 1, show: standIs('organizer') },
+      { key: 'trayDepth', label: 'Front tray depth', unit: 'mm', type: 'range', min: 15, max: 120, step: 1, show: standIs('organizer', 'tray') },
+      { key: 'drainHole', label: 'Drainage hole', type: 'checkbox', show: standIs('planter'), hint: 'Leave off to use it as a cachepot with a plastic nursery pot inside.' },
+      {
+        key: 'candleDiameter',
+        label: 'Light pocket diameter',
+        unit: 'mm',
+        type: 'range',
+        min: 30,
+        max: 80,
+        step: 0.5,
+        show: standIs('candle'),
+        hint: 'Tealights are 38–39 mm; battery puck lights are often 60–75 mm. Use LED lights: PLA softens near a real flame.',
+      },
+      { key: 'candleGap', label: 'Gap behind the art', unit: 'mm', type: 'range', min: 10, max: 80, step: 1, show: standIs('candle') },
+      { key: 'candleLift', label: 'Light height', unit: 'mm', type: 'range', min: 0, max: 80, step: 1, show: standIs('candle'), hint: 'Raise the light so it shines through the middle of the art.' },
+      { key: 'bookendDepth', label: 'Book plate depth', unit: 'mm', type: 'range', min: 50, max: 200, step: 1, show: standIs('bookend') },
+      { key: 'containerHeight', label: 'Support wall height', unit: 'mm', type: 'range', min: 40, max: 200, step: 1, show: standIs('bookend'), alias: 'bookendWall' },
+      { key: 'standWall', label: 'Wall thickness', unit: 'mm', type: 'range', min: 1.2, max: 5, step: 0.1, show: standIs('pencil', 'organizer', 'tray', 'candle', 'planter', 'bookend') },
+      { key: 'slotDepth', label: 'Slot depth', unit: 'mm', type: 'range', min: 2, max: 30, step: 0.5, show: standIs() },
+      { key: 'clearance', label: 'Slot clearance', unit: 'mm', type: 'range', min: 0, max: 1, step: 0.05, show: standIs() },
     ],
   },
   {
@@ -303,22 +339,30 @@ export const SECTIONS = [
 export const PRESETS = {
   ornament: {
     label: 'Ornament disc',
-    values: { frameShape: 'circle', width: 80, frameWidth: 3.5, baseStyle: 'foot', baseWidth: 50, baseHeight: 5, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true },
+    values: { frameShape: 'circle', width: 80, frameWidth: 3.5, baseStyle: 'foot', baseWidth: 50, baseHeight: 5, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'block' },
   },
   plaque: {
     label: 'Desk plaque',
-    values: { frameShape: 'rect', width: 120, height: 90, cornerRadius: 8, frameWidth: 5, baseStyle: 'foot', baseWidth: 120, baseHeight: 6, footDepth: 30, footPosition: 'center', artThickness: 3, frameThickness: 4, stand: false },
+    values: { frameShape: 'rect', width: 120, height: 90, cornerRadius: 8, frameWidth: 5, baseStyle: 'foot', baseWidth: 120, baseHeight: 6, footDepth: 30, footPosition: 'center', artThickness: 3, frameThickness: 4, stand: false, standType: 'none' },
   },
   window: {
     label: 'Arch window',
-    values: { frameShape: 'arch', width: 90, height: 130, frameWidth: 5, baseStyle: 'foot', baseWidth: 100, baseHeight: 8, footDepth: 35, footPosition: 'center', artThickness: 3, frameThickness: 5, stand: false },
+    values: { frameShape: 'arch', width: 90, height: 130, frameWidth: 5, baseStyle: 'foot', baseWidth: 100, baseHeight: 8, footDepth: 35, footPosition: 'center', artThickness: 3, frameThickness: 5, stand: false, standType: 'none' },
   },
   shadowbox: {
     label: 'Shadow box',
-    values: { frameShape: 'rect', width: 130, height: 100, cornerRadius: 4, frameWidth: 5, baseStyle: 'foot', baseWidth: 130, baseHeight: 6, footDepth: 0, artThickness: 1.6, frameThickness: 6, layers: 3, layerStep: 1.4, stand: true },
+    values: { frameShape: 'rect', width: 130, height: 100, cornerRadius: 4, frameWidth: 5, baseStyle: 'foot', baseWidth: 130, baseHeight: 6, footDepth: 0, artThickness: 1.6, frameThickness: 6, layers: 3, layerStep: 1.4, stand: true, standType: 'block' },
+  },
+  penholder: {
+    label: 'Pen holder',
+    values: { frameShape: 'circle', width: 90, frameWidth: 4, baseStyle: 'foot', baseWidth: 60, baseHeight: 6, footDepth: 0, artThickness: 3, frameThickness: 4, stand: true, standType: 'pencil' },
+  },
+  lantern: {
+    label: 'Tealight lantern',
+    values: { frameShape: 'arch', width: 90, height: 120, frameWidth: 5, baseStyle: 'foot', baseWidth: 70, baseHeight: 6, footDepth: 0, artThickness: 2.4, frameThickness: 3.2, stand: true, standType: 'candle' },
   },
   cutout: {
     label: 'Laser / Cricut SVG',
-    values: { frameShape: 'none', width: 120, height: 120, cornerRadius: 0, baseStyle: 'none', islandMode: 'bridge', stand: false },
+    values: { frameShape: 'none', width: 120, height: 120, cornerRadius: 0, baseStyle: 'none', islandMode: 'bridge', stand: false, standType: 'none' },
   },
 };

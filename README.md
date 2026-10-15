@@ -45,6 +45,24 @@ Everything runs locally in the browser. Your images are never uploaded.
 - Tones are found by clustering, so flat-coloured art splits exactly at its colours.
 - The SVG export keeps each depth layer as its own group, which is useful for layered laser cutting.
 
+**Functional holders**
+
+Instead of a plain slot stand, the art can slide into something you use every day. Each holder:
+- shares the same friction-fit slot;
+- puts tall parts *behind* the art, so the silhouette is never hidden;
+- sizes itself to your piece when you pick it.
+
+| Holder | What it is |
+| --- | --- |
+| Pen & pencil cup | A cup behind the art; the pens poke up over it. |
+| Desk organizer | 1–6 pen compartments behind the art and a low clip/eraser tray in front. |
+| Trinket / key tray | A low tray in front for keys, rings and coins. |
+| Tealight holder | A raised pocket behind the art. Light glows through the cut-outs and casts the silhouette's shadow. The pocket is 39.5 mm for tealights and up to 80 mm for LED puck lights. Use LED lights, because PLA softens near a real flame. |
+| Mini planter | A cachepot behind the art, with an optional drainage hole. |
+| Bookend | A support wall right behind the art, and a plate the books stand on. |
+
+The 3D preview shows each holder in use: pencils, a lit tealight, a succulent, books. These props are for display only and are never exported. Holders are included in the printer bed check, and they print open side up with no supports.
+
 **Standing it up**
 - A flat **foot** under any frame shape gives it a flat bottom.
 - An optional **deep foot** (centred or front-only) makes the piece stand on its own.

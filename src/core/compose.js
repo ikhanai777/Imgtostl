@@ -145,7 +145,8 @@ export function computeLayout(s) {
   const hasText = hasBase && !!(s.text && s.text.trim());
   // With a slot stand the bottom of the foot is hidden in the slot, so the
   // text sits above that reserve.
-  const standActive = hasBase && s.stand && !(s.footDepth > Math.max(s.artThickness, s.frameThickness));
+  const standActive =
+    hasBase && s.stand && s.standType !== 'none' && !(s.footDepth > Math.max(s.artThickness, s.frameThickness));
   const textBlock = hasText ? s.textSize + 2 * TEXT_MARGIN : 0;
   const slotReserve = hasText && standActive ? s.slotDepth : 0;
   const baseHeight = hasBase ? Math.max(s.baseHeight, textBlock + slotReserve) : 0;

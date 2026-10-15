@@ -3,7 +3,8 @@
 import { blurField, thresholdField } from './filters.js';
 import { cleanArt, composeSolid, strokeMasks } from './compose.js';
 import { traceMask } from './trace.js';
-import { bottomMm, buildPiece, buildStand, extractMesh, extractParts, freeAll, loopsToPolygons } from './mesh.js';
+import { bottomMm, buildPiece, extractMesh, extractParts, freeAll, loopsToPolygons } from './mesh.js';
+import { buildFunctionalStand } from './stands.js';
 import { and, andNot, components, countSolid, removeSmallSolids } from './mask.js';
 
 export const DEFAULTS = {
@@ -38,8 +39,20 @@ export const DEFAULTS = {
   footDepth: 0, // mm, 0 = same as slab
   footPosition: 'center', // center | front
   stand: true,
+  standType: 'block', // see STAND_TYPES
   standDepth: 30,
   standHeight: 12,
+  standWall: 2.4, // mm, walls of cups and trays
+  containerWidth: 70,
+  containerDepth: 55,
+  containerHeight: 80,
+  compartments: 3,
+  trayDepth: 35,
+  candleDiameter: 39.5, // standard tealight cup is 38-39 mm
+  candleGap: 25, // mm between the art and the tealight
+  candleLift: 15,
+  drainHole: false,
+  bookendDepth: 110,
   slotDepth: 8,
   clearance: 0.3,
   // connectivity
@@ -243,16 +256,27 @@ export function build3D(wasm, s, r) {
     text,
   });
   let stand = null;
-  if (s.stand && r.layout.hasBase && !foot) {
-    stand = buildStand(wasm, {
+  const standType = s.stand ? s.standType || 'block' : 'none';
+  if (standType !== 'none' && r.layout.hasBase && !foot) {
+    stand = buildFunctionalStand(wasm, {
+      type: standType,
       slab: Math.max(s.artThickness, s.frameThickness),
       clearance: s.clearance,
       baseWidth: s.baseWidth,
-      wall: 4,
+      wall: s.standWall,
       depth: s.standDepth,
       height: s.standHeight,
       slotDepth: Math.min(s.slotDepth, r.layout.slotDepthMax),
-      chamfer: 2,
+      containerWidth: s.containerWidth,
+      containerDepth: s.containerDepth,
+      containerHeight: s.containerHeight,
+      compartments: s.compartments,
+      trayDepth: s.trayDepth,
+      candleDiameter: s.candleDiameter,
+      candleGap: s.candleGap,
+      candleLift: s.candleLift,
+      drainHole: s.drainHole,
+      bookendDepth: s.bookendDepth,
     });
   }
   const m = piece.manifold;
@@ -280,6 +304,7 @@ export function build3D(wasm, s, r) {
     info,
     previewMesh: extractMeshRaw(m),
     standMesh: stand ? extractMeshRaw(stand.manifold) : null,
+    standProps: stand ? stand.props || { type: 'block' } : null,
     parts,
     partMeshes: parts ? parts.map((p) => ({ ...extractMeshRaw(p.manifold), name: p.name, color: p.color })) : null,
     exportPiece: () => extractMesh(m, s.orientation),

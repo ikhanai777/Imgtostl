@@ -4,6 +4,7 @@ import wasmUrl from 'manifold-3d/manifold.wasm?url';
 import { SECTIONS, PRESETS } from './ui/schema.js';
 import { Preview3D, SCENES, FINISHES } from './ui/preview3d.js';
 import { fitsBed, printerById } from './core/printers.js';
+import { STAND_TYPES, standDefaults } from './core/stands.js';
 import { DEFAULTS, build2D, build3D } from './core/pipeline.js';
 import { computeLayout } from './core/compose.js';
 import { toBinarySTL, toSVG } from './core/mesh.js';
@@ -50,10 +51,17 @@ const state = {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    return { ...DEFAULTS, ...saved };
+    return normalizeSettings({ ...DEFAULTS, ...saved });
   } catch {
     return { ...DEFAULTS };
   }
+}
+
+// Older saves only had the `stand` on/off switch.
+function normalizeSettings(s) {
+  if (!s.stand) s.standType = 'none';
+  else if (s.standType === 'none') s.stand = false;
+  return s;
 }
 
 function saveSettings() {
@@ -101,7 +109,8 @@ function buildControls() {
 function buildControl(c) {
   const wrap = document.createElement('div');
   wrap.className = `ctl ${c.type === 'checkbox' ? 'check' : c.type}`;
-  const id = `c-${c.key}`;
+  // `alias` lets one setting appear twice under different labels.
+  const id = `c-${c.alias || c.key}`;
   if (c.type === 'checkbox') {
     wrap.innerHTML = `<label><input type="checkbox" id="${id}"> ${c.label}</label>`;
     const input = wrap.querySelector('input');
@@ -145,16 +154,16 @@ function buildControl(c) {
     h.textContent = c.hint;
     wrap.appendChild(h);
   }
-  controlEls.set(c.key, { def: c, wrap });
+  controlEls.set(c.alias || c.key, { def: c, wrap });
   return wrap;
 }
 
 function syncControls() {
   const s = state.s;
   for (const { sec, det } of sectionEls) det.hidden = sec.show ? !sec.show(s) : false;
-  for (const [key, { def, wrap }] of controlEls) {
+  for (const { def, wrap } of controlEls.values()) {
     wrap.hidden = def.show ? !def.show(s) : false;
-    const v = s[key];
+    const v = s[def.key];
     if (def.type === 'actions') continue;
     if (def.type === 'checkbox') wrap.querySelector('input').checked = !!v;
     else if (def.type === 'select') wrap.querySelector('select').value = v;
@@ -173,6 +182,14 @@ function syncControls() {
 }
 
 function set(patch, { rerun = true } = {}) {
+  if ('standType' in patch && patch.standType !== state.s.standType) {
+    // Picking a holder: switch the stand on/off and size it to the piece.
+    patch.stand = patch.standType !== 'none';
+    if (patch.stand) {
+      const L = computeLayout({ ...state.s, ...patch });
+      patch = { ...standDefaults(patch.standType, L.frameW, L.frameH + L.baseHeight), ...patch };
+    }
+  }
   Object.assign(state.s, patch);
   if (state.source && state.s.autoThreshold && ('mode' in patch || 'invert' in patch || 'keyColor' in patch)) {
     state.s.threshold = Math.round(autoThreshold(state.source, state.s));
@@ -225,7 +242,7 @@ async function run() {
     m.draft = draft;
     state.result3d = m;
     preview3d.setOptions({ orientation: s.orientation });
-    preview3d.show(m.previewMesh, m.standMesh, m.partMeshes);
+    preview3d.show(m.previewMesh, m.standMesh, m.partMeshes, m.standProps);
     renderStatus();
     if (draft) {
       await new Promise((res) => setTimeout(res, 450));
@@ -245,7 +262,7 @@ function finalizeModel(wasm, s, r) {
   const m = build3D(wasm, s, r);
   state.result3d?.dispose();
   state.result3d = m;
-  preview3d.show(m.previewMesh, m.standMesh, m.partMeshes);
+  preview3d.show(m.previewMesh, m.standMesh, m.partMeshes, m.standProps);
   renderStatus();
   return m;
 }
@@ -434,7 +451,7 @@ function renderStatus() {
     badges.push(['', `${m.info.triangles.toLocaleString()} triangles`]);
     if (m.info.status === 'NoError') badges.push(['ok', '✓ Watertight']);
     else badges.push(['bad', `Mesh: ${m.info.status}`]);
-    if (m.stand) badges.push(['', `Stand ≈ ${((m.info.standVolume / 1000) * 1.24).toFixed(0)} g`]);
+    if (m.stand) badges.push(['', `${standLabel()} ≈ ${((m.info.standVolume / 1000) * 1.24).toFixed(0)} g`]);
     // Printer bed check, in the orientation the STL is exported in.
     const [, pname, bed] = printerById(s.printer);
     const parts = [s.orientation === 'upright' ? [size[0], size[2], size[1]] : size];
@@ -459,6 +476,7 @@ function updateButtons() {
   $('dl-svg').disabled = !(state.result2d && state.result2d.solidPolys.length);
   const stand = $('dl-stand');
   stand.hidden = !(state.result3d && state.result3d.stand);
+  stand.textContent = `${standLabel()} STL`;
   stand.disabled = stand.hidden;
 }
 
@@ -799,7 +817,7 @@ function restore(snap) {
     state.wandOps = wandOps;
     applySource();
   }
-  state.s = { ...DEFAULTS, ...s };
+  state.s = normalizeSettings({ ...DEFAULTS, ...s });
   state.strokes = strokes;
   saveSettings();
   syncControls();
@@ -861,7 +879,7 @@ document.addEventListener('keydown', (e) => {
 const preview3d = new Preview3D($('stage3d'));
 const VIEW_KEY = 'imgtostl:view:v1';
 const view = (() => {
-  const d = { scene: 'studio', finish: 'matte', color: '#ff7a45', color2: '#2f3a4a', color3: '#f3efe6', layerLines: true, turntable: false };
+  const d = { scene: 'studio', finish: 'matte', color: '#ff7a45', color2: '#2f3a4a', color3: '#f3efe6', layerLines: true, turntable: false, props: true };
   try {
     return { ...d, ...JSON.parse(localStorage.getItem(VIEW_KEY) || '{}') };
   } catch {
@@ -877,6 +895,7 @@ $('v-color2').value = view.color2;
 $('v-color3').value = view.color3;
 $('v-layers').checked = view.layerLines;
 $('v-turn').checked = view.turntable;
+$('v-props').checked = view.props;
 
 function setView(patch) {
   Object.assign(view, patch);
@@ -895,6 +914,7 @@ $('v-color2').addEventListener('input', (e) => setView({ color2: e.target.value 
 $('v-color3').addEventListener('input', (e) => setView({ color3: e.target.value }));
 $('v-layers').addEventListener('change', (e) => setView({ layerLines: e.target.checked }));
 $('v-turn').addEventListener('change', (e) => setView({ turntable: e.target.checked }));
+$('v-props').addEventListener('change', (e) => setView({ props: e.target.checked }));
 setView({ ...view });
 $('fit3d').addEventListener('click', () => preview3d.fit());
 $('snap3d').addEventListener('click', async () => {
@@ -949,6 +969,11 @@ async function deliver(files) {
   }
 }
 
+function standLabel() {
+  const t = STAND_TYPES.find(([v]) => v === state.s.standType);
+  return t && t[0] !== 'block' ? t[1] : 'Stand';
+}
+
 function baseName() {
   return `${state.sourceName}-${state.s.frameShape}-${Math.round(state.s.width)}mm`;
 }
@@ -957,7 +982,7 @@ function stlFiles({ withStand }) {
   const m = finalModel();
   const files = [{ name: `${baseName()}.stl`, data: toBinarySTL(m.exportPiece(), baseName()), type: 'model/stl' }];
   const stand = withStand && m.exportStand();
-  if (stand) files.push({ name: `${baseName()}-stand.stl`, data: toBinarySTL(stand, 'stand'), type: 'model/stl' });
+  if (stand) files.push({ name: `${baseName()}-${state.s.standType}.stl`, data: toBinarySTL(stand, standLabel()), type: 'model/stl' });
   return files;
 }
 
@@ -1022,7 +1047,7 @@ async function openProject(file) {
     state.wandOps = Array.isArray(p.wandOps) ? p.wandOps : [];
     applySource();
     state.sourceName = p.name || 'project';
-    state.s = { ...DEFAULTS, ...p.settings };
+    state.s = normalizeSettings({ ...DEFAULTS, ...p.settings });
     state.strokes = Array.isArray(p.strokes) ? p.strokes : [];
     saveSettings();
     syncControls();
